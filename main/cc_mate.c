@@ -80,20 +80,50 @@ static uint8_t bat_read_level(void) {
     return (uint8_t)((s_vbat_ema - 3.0f) / (4.12f - 3.0f) * 100.0f);
 }
 
-/* ── 查询任务: 首轮立即, 之后按 poll_min ── */
+/* ── 查询任务 (方案B: 查完断网省电) ──
+ *
+ * 周期: 唤醒 → 连 WiFi → 等时间同步 → 查询 → 关射频 → 睡 poll_min 分钟 → 周而复始
+ * 射频关闭期间: 时钟/UI/电池照常, 仅断网。关射频触发的断连事件被 wifi_mgr 屏蔽。
+ */
 static void net_task(void *arg) {
     (void)arg;
-    /* 等 WiFi */
+    /* 首轮: 等 WiFi (app_main 已发起连接) */
     int wait = 0;
     while (!net_query_wifi_ok() && wait < 20000) {
         vTaskDelay(pdMS_TO_TICKS(500));
         wait += 500;
     }
+
     while (1) {
+        int period = s_cfg.poll_min >= 1 ? s_cfg.poll_min : 5;
+
         ESP_LOGI(TAG, "poll round");
         net_query_poll(&s_state, &s_cfg);
-        int period = s_cfg.poll_min >= 1 ? s_cfg.poll_min : 5;
-        vTaskDelay(pdMS_TO_TICKS(period * 60000));
+
+        /* 时间未同步 (SNTP 未完成): 再等最多 10s 并补查一次, 保证消费历史有日期 */
+        if (!s_state.time_valid) {
+            for (int i = 0; i < 20 && !s_state.time_valid; i++) {
+                vTaskDelay(pdMS_TO_TICKS(500));
+                s_state.time_valid = (time(NULL) > 1700000000);
+            }
+            if (s_state.time_valid) {
+                ESP_LOGI(TAG, "sntp synced late, re-poll");
+                net_query_poll(&s_state, &s_cfg);
+            }
+        }
+
+        /* ── 断网休眠 ── */
+        wifi_mgr_radio_sleep();
+        vTaskDelay(pdMS_TO_TICKS((uint32_t)period * 60000));
+
+        /* ── 唤醒重连 ── */
+        wifi_mgr_radio_wake();
+        wait = 0;
+        while (!net_query_wifi_ok() && wait < 30000) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            wait += 500;
+        }
+        /* 连不上: 断连事件的重试/门户逻辑接管; 下一轮 poll 会报错并重试 */
     }
 }
 
@@ -186,9 +216,11 @@ void app_main(void)
     while (1) {
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
 
-        /* WiFi 状态 */
+        /* WiFi 状态: 连接 > 射频休眠 > 连接中 */
         if (net_query_wifi_ok()) s_state.net = NET_CONNECTED;
-        else if (s_state.net == NET_CONNECTED) s_state.net = NET_CONNECTING;
+        else if (!wifi_mgr_radio_on()) s_state.net = NET_RADIO_SLEEP;
+        else if (s_state.net != NET_RADIO_SLEEP) s_state.net = NET_CONNECTING;
+        else s_state.net = NET_CONNECTING;
 
         /* 事件回调请求的配网切换 (在主任务执行, 回调内不可阻塞) */
         if (wifi_mgr_poll_portal()) {

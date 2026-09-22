@@ -323,6 +323,7 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
 
     switch (s->net) {
         case NET_CONNECTED:   lv_label_set_text(ui->wifi_label, "WiFi");   break;
+        case NET_RADIO_SLEEP: lv_label_set_text(ui->wifi_label, "休眠");   break;
         case NET_CONNECTING:  lv_label_set_text(ui->wifi_label, "连接");   break;
         case NET_PORTAL:      lv_label_set_text(ui->wifi_label, "配网");   break;
         case NET_UNCONFIGURED:lv_label_set_text(ui->wifi_label, "未配置"); break;

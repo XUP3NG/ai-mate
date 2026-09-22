@@ -29,6 +29,7 @@ typedef enum {
     NET_CONNECTED,          /* WiFi 已连接 */
     NET_FAILED,             /* 连接失败 (重试后进入配网) */
     NET_PORTAL,             /* AP 配网模式 */
+    NET_RADIO_SLEEP,        /* 查询间隔内射频关闭 (省电, 定时唤醒) */
 } net_state_t;
 
 /* ── 智谱 GLM Coding Plan 窗口 ── */

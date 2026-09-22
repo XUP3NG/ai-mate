@@ -14,6 +14,7 @@ static const char *TAG = "wifi";
 static int s_retry_count = 0;
 static bool s_got_ip = false;
 static volatile bool s_need_portal = false;   /* 事件回调只置标志, 由主任务切门户 (回调内不可阻塞/调 esp_wifi_stop) */
+static volatile bool s_radio_off = false;     /* 方案B: 查询间隔内射频关闭; 屏蔽由此产生的断连事件 */
 
 /* 请求进入配网模式 (线程安全, 可从事件回调调用) */
 void wifi_mgr_request_portal(void) { s_need_portal = true; }
@@ -26,12 +27,34 @@ bool wifi_mgr_poll_portal(void) {
     return true;   /* 不会到达 (portal 内部常驻) */
 }
 
+/* ── 方案B: 查询间隔内关射频省电 ── */
+
+void wifi_mgr_radio_sleep(void) {
+    if (s_radio_off) return;
+    s_radio_off = true;
+    s_got_ip = false;
+    s_retry_count = 0;
+    esp_wifi_stop();          /* 触发的 DISCONNECT 事件被 s_radio_off 屏蔽 */
+    ESP_LOGI(TAG, "radio off (power save)");
+}
+
+void wifi_mgr_radio_wake(void) {
+    if (!s_radio_off) return;
+    s_radio_off = false;
+    s_retry_count = 0;
+    ESP_ERROR_CHECK(esp_wifi_start());   /* STA_START 事件自动 esp_wifi_connect() */
+    ESP_LOGI(TAG, "radio on, reconnecting...");
+}
+
+bool wifi_mgr_radio_on(void) { return !s_radio_off; }
+
 static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         ESP_LOGI(TAG, "sta started, connecting...");
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        if (s_radio_off) return;   /* 主动关射频产生的断连, 忽略 (不重试不进门户) */
         s_got_ip = false;
         uint8_t reason = data ? ((wifi_event_sta_disconnected_t *)data)->reason : 0;
         if (s_retry_count < 20) {

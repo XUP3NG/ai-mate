@@ -28,6 +28,10 @@ void wifi_mgr_start_portal(app_config_t *cfg);
 void wifi_mgr_request_portal(void);
 /* 主任务轮询: 若有门户请求则切换 (阻塞), 返回 false 表示无请求 */
 bool wifi_mgr_poll_portal(void);
+/* 方案B 省电: 查询间隔内关/开射频 (射频关闭期间时钟与 UI 正常, 仅断网) */
+void wifi_mgr_radio_sleep(void);
+void wifi_mgr_radio_wake(void);
+bool wifi_mgr_radio_on(void);
 
 #ifdef __cplusplus
 }
