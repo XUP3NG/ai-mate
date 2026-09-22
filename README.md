@@ -9,7 +9,7 @@ ESP32-S3 + 4.2" RLCD 墨水屏（400×300 纯黑白），**WiFi 直连**查询 *
 | 项目 | 规格 |
 |------|------|
 | 主控 | ESP32-S3 (Waveshare ESP32-S3-RLCD-4.2) |
-| 屏幕 | 400×300, 1-bit B/W, ST7305 反射式 LCD（断电保持画面） |
+| 屏幕 | 400×300, 1-bit B/W, ST7305 反射式 LCD |
 | 通信 | WiFi STA（查询）+ SoftAP（配网门户） |
 | 按键 | BOOT (GPIO0) 长按 3s 重新配网 |
 | 电池 | ADC GPIO2（可选） |
