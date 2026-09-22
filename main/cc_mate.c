@@ -210,8 +210,8 @@ void app_main(void)
             lvgl_port_unlock();
         }
 
-        /* UI: 每 1s (含时钟) */
-        if (now - last_ui > 1000) {
+        /* UI: 每 2s (省电; 时钟分钟级, 无需更快) */
+        if (now - last_ui > 2000) {
             lvgl_port_lock(-1);
             ui_update(&s_ui, &s_state);
             lvgl_port_unlock();

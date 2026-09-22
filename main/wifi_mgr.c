@@ -80,6 +80,8 @@ void wifi_mgr_connect(const app_config_t *cfg) {
     strlcpy((char *)wc.sta.password, cfg->wifi_pass, sizeof(wc.sta.password));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
     ESP_ERROR_CHECK(esp_wifi_start());
+    /* 省电: MAX modem sleep — 信标间隔间射频休眠 (轮询场景延迟不敏感) */
+    esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
     s_retry_count = 0;
     ESP_LOGI(TAG, "connecting to \"%s\" (via STA_START)...", cfg->wifi_ssid);
 }
