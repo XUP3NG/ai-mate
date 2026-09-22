@@ -1,0 +1,223 @@
+/**
+ * AI_Mate — AI 额度监控桌面摆件 (ESP-IDF)
+ *
+ * 芯片: ESP32-S3
+ * 屏幕: Waveshare ESP32-S3-RLCD-4.2 (ST7305, 400×300 B/W, SPI)
+ *
+ * 功能:
+ *   WiFi 直连查询智谱 GLM Coding Plan 额度 + DeepSeek 余额
+ *   余额快照推算每日消费 → 热力图
+ *   AP 配网门户 (长按 BOOT 3s 重新配网)
+ */
+
+#include "cc_mate.h"
+#include "config_store.h"
+#include "wifi_mgr.h"
+#include "net_query.h"
+#include "ui/ui.h"
+#include "rlcd_display.h"
+#include "esp_lvgl_port.h"
+
+#include <stdio.h>
+#include <string.h>
+#include "esp_log.h"
+#include "esp_err.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "esp_wifi.h"
+#include "nvs_flash.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/gpio.h"
+
+static const char *TAG = "ai_mate";
+
+static app_config_t s_cfg;
+static app_state_t  s_state;
+static ui_elements_t s_ui;
+
+/* ── 电池 ADC (可选) ── */
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+
+#define BAT_ADC_CHANNEL  ADC_CHANNEL_3   /* GPIO2 */
+#define BAT_ADC_UNIT     ADC_UNIT_1
+
+static adc_oneshot_unit_handle_t s_adc1 = NULL;
+static adc_cali_handle_t s_adc1_cali = NULL;
+
+static void bat_adc_init(void) {
+    adc_cali_curve_fitting_config_t cali = {
+        .unit_id  = BAT_ADC_UNIT,
+        .atten    = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+    if (adc_cali_create_scheme_curve_fitting(&cali, &s_adc1_cali) != ESP_OK) return;
+    adc_oneshot_unit_init_cfg_t init_cfg = { .unit_id = BAT_ADC_UNIT };
+    if (adc_oneshot_new_unit(&init_cfg, &s_adc1) != ESP_OK) return;
+    adc_oneshot_chan_cfg_t chan_cfg = { .bitwidth = ADC_BITWIDTH_12, .atten = ADC_ATTEN_DB_12 };
+    if (adc_oneshot_config_channel(s_adc1, BAT_ADC_CHANNEL, &chan_cfg) != ESP_OK) return;
+    s_state.battery_configured = true;
+}
+
+static uint8_t bat_read_level(void) {
+    if (!s_adc1) return 0;
+    int raw_sum = 0;
+    for (int i = 0; i < 8; i++) {
+        int raw = 0;
+        if (adc_oneshot_read(s_adc1, BAT_ADC_CHANNEL, &raw) == ESP_OK) raw_sum += raw;
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+    int mv = 0;
+    adc_cali_raw_to_voltage(s_adc1_cali, raw_sum / 8, &mv);
+    float vbat = mv * 0.001f * 3.0f;
+    if (vbat <= 3.0f) return 0;
+    if (vbat >= 4.12f) return 100;
+    static float s_vbat_ema = -1.0f;
+    if (s_vbat_ema < 0) s_vbat_ema = vbat;
+    else s_vbat_ema = s_vbat_ema * 0.85f + vbat * 0.15f;
+    return (uint8_t)((s_vbat_ema - 3.0f) / (4.12f - 3.0f) * 100.0f);
+}
+
+/* ── 查询任务: 首轮立即, 之后按 poll_min ── */
+static void net_task(void *arg) {
+    (void)arg;
+    /* 等 WiFi */
+    int wait = 0;
+    while (!net_query_wifi_ok() && wait < 20000) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        wait += 500;
+    }
+    while (1) {
+        ESP_LOGI(TAG, "poll round");
+        net_query_poll(&s_state, &s_cfg);
+        int period = s_cfg.poll_min >= 1 ? s_cfg.poll_min : 5;
+        vTaskDelay(pdMS_TO_TICKS(period * 60000));
+    }
+}
+
+/* ── BOOT 键任务: 长按 3s → 清 WiFi → 重启进配网 ── */
+static void boot_key_task(void *arg) {
+    (void)arg;
+    gpio_config_t io = {
+        .pin_bit_mask = 1ULL << 0,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+    };
+    gpio_config(&io);
+    while (1) {
+        int low_ms = 0;
+        while (gpio_get_level(GPIO_NUM_0) == 0) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            low_ms += 50;
+            if (low_ms >= 3000) {
+                ESP_LOGW(TAG, "BOOT long-press: re-provision");
+                config_clear();
+                esp_restart();
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+/* ── app_main ── */
+void app_main(void)
+{
+    ESP_LOGI(TAG, "=== AI Mate starting ===");
+
+    /* NVS */
+    esp_err_t nvs_ret = nvs_flash_init();
+    if (nvs_ret == ESP_ERR_NVS_NO_FREE_PAGES || nvs_ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ESP_ERROR_CHECK(nvs_flash_init());
+    }
+
+    /* 电池 ADC (可选) */
+    bat_adc_init();
+
+    /* RLCD + LVGL 初始化 (先起屏幕, 配网页也要显示) */
+    rlcd_config_t rlcd_cfg = {
+        .width  = DISPLAY_WIDTH,
+        .height = DISPLAY_HEIGHT,
+        .mosi   = 12,
+        .scl    = 11,
+        .cs     = 40,
+        .dc     = 5,
+        .rst    = 41,
+    };
+    esp_err_t ret = rlcd_init(&rlcd_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "RLCD init failed: %s, restarting...", esp_err_to_name(ret));
+        esp_restart();
+    }
+
+    lvgl_port_lock(-1);
+    ui_init(&s_ui);
+    ui_update(&s_ui, &s_state);
+    lvgl_port_unlock();
+
+    /* WiFi / 配网 */
+    wifi_mgr_init();
+    bool configured = config_load(&s_cfg);
+
+    if (!configured) {
+        ESP_LOGW(TAG, "no config → portal");
+        s_state.net = NET_PORTAL;
+        lvgl_port_lock(-1);
+        ui_show_page(&s_ui, 2);
+        ui_update(&s_ui, &s_state);
+        lvgl_port_unlock();
+        wifi_mgr_start_portal(&s_cfg);   /* 阻塞, 保存后 esp_restart() */
+        return;
+    }
+
+    s_state.net = NET_CONNECTING;
+    net_query_init_time();
+    wifi_mgr_connect(&s_cfg);
+
+    xTaskCreatePinnedToCore(net_task, "net", 12288, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(boot_key_task, "bootkey", 3072, NULL, 3, NULL, 0);
+
+    /* 主循环: 页面轮播 + 定期刷新 */
+    uint32_t last_bat = 0, last_ui = 0, page_start = 0;
+    int page = 0;
+
+    while (1) {
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+
+        /* WiFi 状态 */
+        if (net_query_wifi_ok()) s_state.net = NET_CONNECTED;
+        else if (s_state.net == NET_CONNECTED) s_state.net = NET_CONNECTING;
+
+        /* 事件回调请求的配网切换 (在主任务执行, 回调内不可阻塞) */
+        if (wifi_mgr_poll_portal()) {
+            /* 不会到达: portal 常驻直至保存重启 */
+        }
+
+        /* 电池: 每 30s (WiFi 模式下电流波动小) */
+        if (now - last_bat > 30000) {
+            s_state.battery_pct = bat_read_level();
+            last_bat = now;
+        }
+
+        /* 页面轮播: 每 15s 切换 主页/热力图 */
+        if (now - page_start > 15000) {
+            page = (page == 0) ? 1 : 0;
+            page_start = now;
+            lvgl_port_lock(-1);
+            ui_show_page(&s_ui, page);
+            lvgl_port_unlock();
+        }
+
+        /* UI: 每 1s (含时钟) */
+        if (now - last_ui > 1000) {
+            lvgl_port_lock(-1);
+            ui_update(&s_ui, &s_state);
+            lvgl_port_unlock();
+            last_ui = now;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}

@@ -1,0 +1,37 @@
+# ESP-IDF 构建产物
+build/
+esp-idf/
+managed_components/
+config/
+sdkconfig.old
+kconfigs.in
+kconfigs_projbuild.in
+ldgen_libraries
+ldgen_libraries.in
+config.env
+flash_args.in
+x509_crt_bundle.S
+*.bin_timestamp
+gdbinit/
+toolchain/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+.claude/
+.superpowers/
+
+# OS
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 运行产物
+monitor_out.txt
