@@ -54,14 +54,21 @@ typedef struct {
     lv_obj_t *chart_info;      /* 今日/本月/30天 */
     lv_obj_t *chart_info2;     /* 日均/最高 */
 
-    /* ── Page 3: 天气 ── */
+    /* ── Page 3: 天气 ──
+     * 上部: 城市 + 更新时间 | 36px 图标 + 36px 温度 + 描述 + 湿度
+     * 下部: 4 列预报 (日期 / 24px 图标 / 高低温) + 底部数据源 */
     lv_obj_t *page_weather;
-    lv_obj_t *wx_title;        /* "天气 · 上海" */
-    lv_obj_t *wx_temp;         /* 大号温度 (Montserrat 20) */
-    lv_obj_t *wx_unit;         /* "度" 紧贴温度右侧 */
-    lv_obj_t *wx_desc;         /* 天气文字 + 湿度 */
-    lv_obj_t *wx_meta;         /* 更新时间 / 错误 */
-    lv_obj_t *wx_days[WX_DAYS];    /* 4 日预报行 */
+    lv_obj_t *wx_city;             /* 左上: 城市 */
+    lv_obj_t *wx_meta;             /* 右上: 更新时间 / 错误 */
+    lv_obj_t *wx_icon;             /* 当前天气大图标 (font_wx_icon_36) */
+    lv_obj_t *wx_temp;             /* 当前温度 (font_wx_num_36) */
+    lv_obj_t *wx_unit;             /* "度" */
+    lv_obj_t *wx_desc;             /* 天气文字 */
+    lv_obj_t *wx_hum;              /* 湿度 */
+    lv_obj_t *wx_day[WX_DAYS];         /* 预报日期标签 (今天/明天/周X) */
+    lv_obj_t *wx_day_icon[WX_DAYS];    /* 预报图标 (font_wx_icon_24) */
+    lv_obj_t *wx_day_temp[WX_DAYS];    /* 预报高低温 (montserrat_20) */
+    lv_obj_t *wx_footer;               /* 数据源 */
 
     /* ── Page 2: 配网提示 ── */
     lv_obj_t *page_portal;

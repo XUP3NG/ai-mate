@@ -17,6 +17,9 @@
 #include "esp_timer.h"
 
 extern const lv_font_t font_cjk_16;
+extern const lv_font_t font_wx_icon_36;
+extern const lv_font_t font_wx_icon_24;
+extern const lv_font_t font_wx_num_36;
 
 /* ── 柱状图几何常量 (page 1) ── */
 #define CHART_X0      6      /* 首柱 x */
@@ -244,7 +247,18 @@ void ui_init(ui_elements_t *ui) {
     ui->chart_info2 = label(ui->page_heat, 8, 258, 384);
     lv_obj_set_style_text_color(ui->chart_info2, c_dim(), 0);
 
-    /* ════ Page 3: 天气 ════ */
+    /* ════ Page 3: 天气 ════
+     *
+     *  ┌ 无锡市 ───────────────────── 更新 2 分钟前 ┐   y=8
+     *  │  ☁(36)      27.0 度                        │   y=34..72
+     *  │              阴            湿度 64%         │   y=78
+     *  ├────────────────────────────────────────────┤   y=104
+     *  │  今天      明天      周三      周四          │   y=136
+     *  │   ☁        ☂        ☀        ☀            │   y=162 (24px)
+     *  │  30/22    28/20    31/21    32/22          │   y=200 (20px)
+     *  │  Open-Meteo                                │   y=250
+     *  └────────────────────────────────────────────┘
+     */
     ui->page_weather = lv_obj_create(scr);
     lv_obj_set_size(ui->page_weather, DISPLAY_WIDTH, DISPLAY_HEIGHT - 24);
     lv_obj_set_pos(ui->page_weather, 0, 24);
@@ -255,30 +269,57 @@ void ui_init(ui_elements_t *ui) {
     lv_obj_remove_flag(ui->page_weather, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(ui->page_weather, LV_OBJ_FLAG_HIDDEN);
 
-    ui->wx_title = label(ui->page_weather, 16, 8, 368);
+    ui->wx_city = label(ui->page_weather, 14, 6, 200);
+    ui->wx_meta = label(ui->page_weather, 214, 6, 172);
+    lv_obj_set_style_text_align(ui->wx_meta, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_style_text_color(ui->wx_meta, c_dim(), 0);
 
-    /* 当前温度: 大号数字 + 紧跟 "度" (与余额同款 align_to 方案) */
-    ui->wx_temp = label_big(ui->page_weather, 16, 40, 0);
+    /* 当前天气: 大图标 + 大号温度 */
+    ui->wx_icon = label(ui->page_weather, 22, 30, 0);
+    lv_obj_set_width(ui->wx_icon, LV_SIZE_CONTENT);
+    lv_obj_set_style_text_font(ui->wx_icon, &font_wx_icon_36, 0);
+    lv_label_set_text(ui->wx_icon, "");
+
+    ui->wx_temp = label(ui->page_weather, 104, 28, 0);
     lv_obj_set_width(ui->wx_temp, LV_SIZE_CONTENT);
+    lv_obj_set_style_text_font(ui->wx_temp, &font_wx_num_36, 0);
     lv_label_set_text(ui->wx_temp, "--");
-    ui->wx_unit = label(ui->page_weather, 0, 48, 0);
+
+    ui->wx_unit = label(ui->page_weather, 0, 46, 0);
     lv_obj_set_width(ui->wx_unit, LV_SIZE_CONTENT);
     lv_label_set_text(ui->wx_unit, "度");
 
-    ui->wx_desc = label(ui->page_weather, 16, 84, 368);
-    ui->wx_meta = label(ui->page_weather, 16, 106, 368);
-    lv_obj_set_style_text_color(ui->wx_meta, c_dim(), 0);
+    ui->wx_desc = label(ui->page_weather, 104, 78, 140);
+    ui->wx_hum  = label(ui->page_weather, 250, 78, 136);
+    lv_obj_set_style_text_align(ui->wx_hum, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_style_text_color(ui->wx_hum, c_dim(), 0);
 
-    /* 4 日预报: 表头 + 行 */
+    /* 分隔线 */
     {
-        lv_obj_t *t = label(ui->page_weather, 16, 132, 368);
-        lv_label_set_text(t, "四日预报");
-        lv_obj_set_style_text_color(t, c_dim(), 0);
+        lv_obj_t *sep = rect(ui->page_weather, 14, 104, DISPLAY_WIDTH - 28, 1, c_tx());
+        (void)sep;
+    }
 
+    /* 4 列预报 */
+    {
+        int col_x[WX_DAYS] = { 8, 104, 200, 296 };   /* 每列 96 宽, 内容居中 */
         for (int i = 0; i < WX_DAYS; i++) {
-            ui->wx_days[i] = label(ui->page_weather, 16, 154 + i * 26, 368);
+            ui->wx_day[i] = label(ui->page_weather, col_x[i], 126, 96);
+            lv_obj_set_style_text_align(ui->wx_day[i], LV_TEXT_ALIGN_CENTER, 0);
+
+            ui->wx_day_icon[i] = label(ui->page_weather, col_x[i], 154, 96);
+            lv_obj_set_style_text_align(ui->wx_day_icon[i], LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_set_style_text_font(ui->wx_day_icon[i], &font_wx_icon_24, 0);
+
+            ui->wx_day_temp[i] = label(ui->page_weather, col_x[i], 192, 96);
+            lv_obj_set_style_text_align(ui->wx_day_temp[i], LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_set_style_text_font(ui->wx_day_temp[i], &lv_font_montserrat_20, 0);
         }
     }
+
+    ui->wx_footer = label(ui->page_weather, 14, 240, 372);
+    lv_obj_set_style_text_color(ui->wx_footer, c_dim(), 0);
+    lv_label_set_text(ui->wx_footer, "数据源 Open-Meteo");
 
     /* ════ Page 2: 配网提示 ════ */
     ui->page_portal = lv_obj_create(scr);
@@ -518,31 +559,34 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
     }
     /* ── 天气页 ── */
     {
-        snprintf(b, sizeof(b), "天气 · %s", s->wx.city[0] ? s->wx.city : "未配置");
-        lv_label_set_text(ui->wx_title, b);
+        lv_label_set_text(ui->wx_city, s->wx.city[0] ? s->wx.city : "定位中...");
 
         if (s->wx.valid) {
+            lv_label_set_text(ui->wx_icon, wmo_icon(s->wx.code));
+
             snprintf(b, sizeof(b), "%.1f", s->wx.temp_x10 / 10.0);
             lv_label_set_text(ui->wx_temp, b);
-            lv_obj_align_to(ui->wx_unit, ui->wx_temp, LV_ALIGN_OUT_RIGHT_BOTTOM, 3, -3);
+            lv_obj_align_to(ui->wx_unit, ui->wx_temp, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -6);
 
-            snprintf(b, sizeof(b), "%s   湿度 %d%%",
-                     wmo_text(s->wx.code), s->wx.humidity);
-            lv_label_set_text(ui->wx_desc, b);
+            lv_label_set_text(ui->wx_desc, wmo_text(s->wx.code));
+            snprintf(b, sizeof(b), "湿度 %d%%", s->wx.humidity);
+            lv_label_set_text(ui->wx_hum, b);
 
             uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-            snprintf(b, sizeof(b), "更新于 %" PRIu32 " 分钟前",
-                     (now - s->wx.last_ok_ms) / 60000);
+            uint32_t mins = (now - s->wx.last_ok_ms) / 60000;
+            if (mins == 0) snprintf(b, sizeof(b), "刚刚更新");
+            else snprintf(b, sizeof(b), "更新于 %" PRIu32 " 分钟前", mins);
             lv_label_set_text(ui->wx_meta, b);
         } else {
+            lv_label_set_text(ui->wx_icon, "");
             lv_label_set_text(ui->wx_temp, "--");
-            lv_obj_align_to(ui->wx_unit, ui->wx_temp, LV_ALIGN_OUT_RIGHT_BOTTOM, 3, -3);
-            lv_label_set_text(ui->wx_desc, "");
-            lv_label_set_text(ui->wx_meta,
-                              s->wx.err[0] ? s->wx.err : "查询中...");
+            lv_obj_align_to(ui->wx_unit, ui->wx_temp, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -6);
+            lv_label_set_text(ui->wx_desc, s->wx.err[0] ? s->wx.err : "查询中...");
+            lv_label_set_text(ui->wx_hum, "");
+            lv_label_set_text(ui->wx_meta, "");
         }
 
-        /* 4 日预报: 今天/明天/周X + 图标 + 天气 + 最高/最低 */
+        /* 4 列预报 */
         static const char *WD[] = {"周日","周一","周二","周三","周四","周五","周六"};
         for (int i = 0; i < WX_DAYS; i++) {
             char day[12];
@@ -554,12 +598,17 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
                 localtime_r(&t, &tm);
                 strlcpy(day, WD[tm.tm_wday % 7], sizeof(day));
             } else strlcpy(day, "--", sizeof(day));
+            lv_label_set_text(ui->wx_day[i], day);
 
-            snprintf(b, sizeof(b), "%s   %s %s   %.0f / %.0f 度",
-                     day,
-                     wmo_icon(s->wx.dcode[i]), wmo_text(s->wx.dcode[i]),
-                     s->wx.tmax_x10[i] / 10.0, s->wx.tmin_x10[i] / 10.0);
-            lv_label_set_text(ui->wx_days[i], b);
+            lv_label_set_text(ui->wx_day_icon[i],
+                              s->wx.valid ? wmo_icon(s->wx.dcode[i]) : "");
+
+            if (s->wx.valid)
+                snprintf(b, sizeof(b), "%.0f/%.0f",
+                         s->wx.tmax_x10[i] / 10.0, s->wx.tmin_x10[i] / 10.0);
+            else
+                snprintf(b, sizeof(b), "--");
+            lv_label_set_text(ui->wx_day_temp[i], b);
         }
     }
 }
