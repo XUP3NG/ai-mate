@@ -235,11 +235,10 @@ void app_main(void)
             last_bat = now;
         }
 
-        /* 页面轮播: 每 15s 切换 主页/柱状图/天气 (未配城市跳过天气) */
+        /* 页面轮播: 每 15s 切换 主页/柱状图/天气 (城市留空=IP 自动定位, 天气始终启用) */
         if (now - page_start > 15000) {
             static const int order[] = { 0, 1, 3 };   /* 0=主页 1=柱状图 3=天气 (2=配网不参与轮播) */
-            int pages = s_cfg.wx_city[0] ? 3 : 2;
-            page = (page + 1) % pages;
+            page = (page + 1) % 3;
             page_start = now;
             lvgl_port_lock(-1);
             ui_show_page(&s_ui, order[page]);

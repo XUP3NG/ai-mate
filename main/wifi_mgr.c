@@ -160,7 +160,7 @@ static const char PORTAL_HTML[] =
 "<h2 style='margin-top:22px'>DeepSeek</h2>"
 "<label>API Key</label><input name='dkey' required>"
 "<h2 style='margin-top:22px'>天气 (选填)</h2>"
-"<label>城市 (如 上海, 留空不启用)</label><input name='wcity'>"
+"<label>城市 (如 上海; 留空 = 按 IP 自动定位)</label><input name='wcity'>"
 "<h2 style='margin-top:22px'>其他</h2>"
 "<label>轮询间隔 (分钟)</label><input name='pmin' value='5'>"
 "<button type='submit'>保存并重启</button>"

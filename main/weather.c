@@ -74,22 +74,32 @@ static void url_encode(const char *in, char *out, size_t sz) {
     out[o] = '\0';
 }
 
-/* ── 坐标缓存 ── */
-static bool coords_load(int32_t *lat, int32_t *lon) {
+/* ── 坐标缓存 (含来源与时间戳, IP 自动定位每日刷新) ── */
+static bool coords_load(int32_t *lat, int32_t *lon, char *city, size_t citysz, int64_t *epo) {
     nvs_handle_t h;
     if (nvs_open(WX_NS, NVS_READONLY, &h) != ESP_OK) return false;
     size_t sz = 4;
     bool ok = nvs_get_i32(h, "wxlat", lat) == ESP_OK &&
               nvs_get_i32(h, "wxlon", lon) == ESP_OK;
+    if (ok && city) {
+        size_t csz = citysz;
+        if (nvs_get_str(h, "wxcity2", city, &csz) != ESP_OK) city[0] = '\0';
+    }
+    if (ok && epo) {
+        size_t esz = 8;
+        if (nvs_get_i64(h, "wxepo", epo) != ESP_OK) *epo = 0;
+    }
     nvs_close(h);
     return ok;
 }
 
-static void coords_save(int32_t lat, int32_t lon) {
+static void coords_save(int32_t lat, int32_t lon, const char *city) {
     nvs_handle_t h;
     if (nvs_open(WX_NS, NVS_READWRITE, &h) != ESP_OK) return;
     nvs_set_i32(h, "wxlat", lat);
     nvs_set_i32(h, "wxlon", lon);
+    if (city) nvs_set_str(h, "wxcity2", city);
+    nvs_set_i64(h, "wxepo", (int64_t)time(NULL));
     nvs_commit(h);
     nvs_close(h);
 }
@@ -99,9 +109,79 @@ void weather_coords_clear(void) {
     if (nvs_open(WX_NS, NVS_READWRITE, &h) == ESP_OK) {
         nvs_erase_key(h, "wxlat");
         nvs_erase_key(h, "wxlon");
+        nvs_erase_key(h, "wxcity2");
+        nvs_erase_key(h, "wxepo");
         nvs_commit(h);
         nvs_close(h);
     }
+}
+
+/* IP 自动定位 (设备直连公网, 无代理): ip-api.com 主, ip.sb 备 */
+static bool ip_locate(int32_t *lat, int32_t *lon, char *city, size_t citysz) {
+    /* 主: ip-api.com (免 Key, UTF-8 JSON, 直接给经纬度和中文城市名) */
+    {
+        static char buf[768];
+        int n = net_https_get("http://ip-api.com/json/?lang=zh-CN&fields=status,lat,lon,city",
+                              NULL, NULL, NULL, buf, sizeof(buf));
+        if (n > 0) {
+            cJSON *root = cJSON_Parse(buf);
+            if (root) {
+                cJSON *j;
+                const char *st = NULL;
+                cJSON *js = cJSON_GetObjectItem(root, "status");
+                if (js && js->valuestring) st = js->valuestring;
+                if (!st || strcmp(st, "success") == 0) {
+                    double la = 0, lo = 0;
+                    if ((j = cJSON_GetObjectItem(root, "latitude")) && cJSON_IsNumber(j)) la = j->valuedouble;
+                    if ((j = cJSON_GetObjectItem(root, "longitude")) && cJSON_IsNumber(j)) lo = j->valuedouble;
+                    /* ip-api 字段名 lat/lon 兼容 */
+                    if (la == 0 && (j = cJSON_GetObjectItem(root, "lat")) && cJSON_IsNumber(j)) la = j->valuedouble;
+                    if (lo == 0 && (j = cJSON_GetObjectItem(root, "lon")) && cJSON_IsNumber(j)) lo = j->valuedouble;
+                    if (la != 0 || lo != 0) {
+                        *lat = (int32_t)(la * 10000);
+                        *lon = (int32_t)(lo * 10000);
+                        if (city && citysz) {
+                            city[0] = '\0';
+                            cJSON *jc = cJSON_GetObjectItem(root, "city");
+                            if (jc && jc->valuestring)
+                                strlcpy(city, jc->valuestring, citysz);
+                        }
+                        cJSON_Delete(root);
+                        return true;
+                    }
+                }
+                cJSON_Delete(root);
+            }
+        }
+    }
+    /* 备: ip.sb (HTTPS) */
+    {
+        static char buf[768];
+        int n = net_https_get("https://api.ip.sb/geoip", NULL, NULL, NULL, buf, sizeof(buf));
+        if (n > 0) {
+            cJSON *root = cJSON_Parse(buf);
+            if (root) {
+                cJSON *j;
+                double la = 0, lo = 0;
+                if ((j = cJSON_GetObjectItem(root, "latitude")) && cJSON_IsNumber(j)) la = j->valuedouble;
+                if ((j = cJSON_GetObjectItem(root, "longitude")) && cJSON_IsNumber(j)) lo = j->valuedouble;
+                if (la != 0 || lo != 0) {
+                    *lat = (int32_t)(la * 10000);
+                    *lon = (int32_t)(lo * 10000);
+                    if (city && citysz) {
+                        city[0] = '\0';
+                        cJSON *jc = cJSON_GetObjectItem(root, "city");
+                        if (jc && jc->valuestring)
+                            strlcpy(city, jc->valuestring, citysz);
+                    }
+                    cJSON_Delete(root);
+                    return true;
+                }
+                cJSON_Delete(root);
+            }
+        }
+    }
+    return false;
 }
 
 /* 城市名 → 坐标 (x10000 定点), 成功 true */
@@ -136,27 +216,49 @@ static bool geocode(const char *city, int32_t *lat, int32_t *lon) {
 
 /* ── 一轮天气查询 ── */
 void weather_query(app_state_t *st, const app_config_t *cfg) {
-    strlcpy(st->wx.city, cfg->wx_city, sizeof(st->wx.city));
-    if (!cfg->wx_city[0]) {
-        strlcpy(st->wx.err, "未配置城市", sizeof(st->wx.err));
-        return;
-    }
     if (!net_query_wifi_ok()) {
         strlcpy(st->wx.err, "WiFi 未连接", sizeof(st->wx.err));
         return;
     }
 
-    /* 坐标: 缓存 → geocoding */
+    bool manual = cfg->wx_city[0] != '\0';
+    if (manual) strlcpy(st->wx.city, cfg->wx_city, sizeof(st->wx.city));
+
+    /* 坐标策略: 手动城市 → geocoding 一次永久缓存;
+     *          留空 → IP 自动定位, 缓存 24h 每日刷新 (换网络自动跟新) */
     int32_t lat = 0, lon = 0;
-    if (!coords_load(&lat, &lon)) {
-        if (!geocode(cfg->wx_city, &lat, &lon)) {
-            strlcpy(st->wx.err, "城市未找到", sizeof(st->wx.err));
-            ESP_LOGW(TAG, "geocode failed for \"%s\"", cfg->wx_city);
-            return;
+    char cached_city[24] = "";
+    int64_t wxepo = 0;
+    bool have = coords_load(&lat, &lon, cached_city, sizeof(cached_city), &wxepo);
+
+    if (manual) {
+        if (!have) {
+            if (!geocode(cfg->wx_city, &lat, &lon)) {
+                strlcpy(st->wx.err, "城市未找到", sizeof(st->wx.err));
+                ESP_LOGW(TAG, "geocode failed for \"%s\"", cfg->wx_city);
+                return;
+            }
+            coords_save(lat, lon, cfg->wx_city);
+            ESP_LOGI(TAG, "geocoded \"%s\" -> %d.%04d, %d.%04d",
+                     cfg->wx_city, lat / 10000, lat % 10000, lon / 10000, lon % 10000);
         }
-        coords_save(lat, lon);
-        ESP_LOGI(TAG, "geocoded \"%s\" -> %d.%04d, %d.%04d",
-                 cfg->wx_city, lat / 10000, lat % 10000, lon / 10000, lon % 10000);
+    } else {
+        int64_t age = (int64_t)time(NULL) - wxepo;
+        if (!have || age < 0 || age > 86400) {
+            char ipcity[24] = "";
+            if (!ip_locate(&lat, &lon, ipcity, sizeof(ipcity))) {
+                strlcpy(st->wx.err, "IP 定位失败", sizeof(st->wx.err));
+                ESP_LOGW(TAG, "ip locate failed");
+                return;
+            }
+            coords_save(lat, lon, ipcity);
+            ESP_LOGI(TAG, "ip-located -> %s (%d.%04d, %d.%04d)",
+                     ipcity, lat / 10000, lat % 10000, lon / 10000, lon % 10000);
+            strlcpy(st->wx.city, ipcity[0] ? ipcity : "自动定位", sizeof(st->wx.city));
+        } else if (st->wx.city[0] == '\0') {
+            strlcpy(st->wx.city, cached_city[0] ? cached_city : "自动定位",
+                    sizeof(st->wx.city));
+        }
     }
 
     char url[288];
