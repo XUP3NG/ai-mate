@@ -25,6 +25,8 @@ typedef struct {
     uint8_t glm_type;       /* 1=个人 2=团队 */
     /* DeepSeek */
     char dsk_key[96];       /* API Key */
+    /* 天气 (Open-Meteo 免 Key, 城市名留空=不启用) */
+    char wx_city[24];
     /* 轮询间隔 (分钟, 1–60) */
     uint8_t poll_min;
 } app_config_t;

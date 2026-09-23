@@ -9,6 +9,7 @@
  */
 
 #include "ui.h"
+#include "weather.h"
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
@@ -242,6 +243,42 @@ void ui_init(ui_elements_t *ui) {
     ui->chart_info  = label(ui->page_heat, 8, 240, 384);
     ui->chart_info2 = label(ui->page_heat, 8, 258, 384);
     lv_obj_set_style_text_color(ui->chart_info2, c_dim(), 0);
+
+    /* ════ Page 3: 天气 ════ */
+    ui->page_weather = lv_obj_create(scr);
+    lv_obj_set_size(ui->page_weather, DISPLAY_WIDTH, DISPLAY_HEIGHT - 24);
+    lv_obj_set_pos(ui->page_weather, 0, 24);
+    lv_obj_set_style_bg_color(ui->page_weather, c_bg(), 0);
+    lv_obj_set_style_border_width(ui->page_weather, 0, 0);
+    lv_obj_set_style_radius(ui->page_weather, 0, 0);
+    lv_obj_set_style_pad_all(ui->page_weather, 0, 0);
+    lv_obj_remove_flag(ui->page_weather, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(ui->page_weather, LV_OBJ_FLAG_HIDDEN);
+
+    ui->wx_title = label(ui->page_weather, 16, 8, 368);
+
+    /* 当前温度: 大号数字 + 紧跟 "度" (与余额同款 align_to 方案) */
+    ui->wx_temp = label_big(ui->page_weather, 16, 40, 0);
+    lv_obj_set_width(ui->wx_temp, LV_SIZE_CONTENT);
+    lv_label_set_text(ui->wx_temp, "--");
+    ui->wx_unit = label(ui->page_weather, 0, 48, 0);
+    lv_obj_set_width(ui->wx_unit, LV_SIZE_CONTENT);
+    lv_label_set_text(ui->wx_unit, "度");
+
+    ui->wx_desc = label(ui->page_weather, 16, 84, 368);
+    ui->wx_meta = label(ui->page_weather, 16, 106, 368);
+    lv_obj_set_style_text_color(ui->wx_meta, c_dim(), 0);
+
+    /* 4 日预报: 表头 + 行 */
+    {
+        lv_obj_t *t = label(ui->page_weather, 16, 132, 368);
+        lv_label_set_text(t, "四日预报");
+        lv_obj_set_style_text_color(t, c_dim(), 0);
+
+        for (int i = 0; i < WX_DAYS; i++) {
+            ui->wx_days[i] = label(ui->page_weather, 16, 154 + i * 26, 368);
+        }
+    }
 
     /* ════ Page 2: 配网提示 ════ */
     ui->page_portal = lv_obj_create(scr);
@@ -479,13 +516,61 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
         }
         lv_label_set_text(ui->chart_info2, b);
     }
+    /* ── 天气页 ── */
+    {
+        snprintf(b, sizeof(b), "天气 · %s", s->wx.city[0] ? s->wx.city : "未配置");
+        lv_label_set_text(ui->wx_title, b);
+
+        if (s->wx.valid) {
+            snprintf(b, sizeof(b), "%.1f", s->wx.temp_x10 / 10.0);
+            lv_label_set_text(ui->wx_temp, b);
+            lv_obj_align_to(ui->wx_unit, ui->wx_temp, LV_ALIGN_OUT_RIGHT_BOTTOM, 3, -3);
+
+            snprintf(b, sizeof(b), "%s   湿度 %d%%",
+                     wmo_text(s->wx.code), s->wx.humidity);
+            lv_label_set_text(ui->wx_desc, b);
+
+            uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+            snprintf(b, sizeof(b), "更新于 %" PRIu32 " 分钟前",
+                     (now - s->wx.last_ok_ms) / 60000);
+            lv_label_set_text(ui->wx_meta, b);
+        } else {
+            lv_label_set_text(ui->wx_temp, "--");
+            lv_obj_align_to(ui->wx_unit, ui->wx_temp, LV_ALIGN_OUT_RIGHT_BOTTOM, 3, -3);
+            lv_label_set_text(ui->wx_desc, "");
+            lv_label_set_text(ui->wx_meta,
+                              s->wx.err[0] ? s->wx.err : "查询中...");
+        }
+
+        /* 4 日预报: 今天/明天/周X + 图标 + 天气 + 最高/最低 */
+        static const char *WD[] = {"周日","周一","周二","周三","周四","周五","周六"};
+        for (int i = 0; i < WX_DAYS; i++) {
+            char day[12];
+            if (i == 0) strlcpy(day, "今天", sizeof(day));
+            else if (i == 1) strlcpy(day, "明天", sizeof(day));
+            else if (s->time_valid) {
+                time_t t = time(NULL) + (time_t)i * 86400;
+                struct tm tm;
+                localtime_r(&t, &tm);
+                strlcpy(day, WD[tm.tm_wday % 7], sizeof(day));
+            } else strlcpy(day, "--", sizeof(day));
+
+            snprintf(b, sizeof(b), "%s   %s %s   %.0f / %.0f 度",
+                     day,
+                     wmo_icon(s->wx.dcode[i]), wmo_text(s->wx.dcode[i]),
+                     s->wx.tmax_x10[i] / 10.0, s->wx.tmin_x10[i] / 10.0);
+            lv_label_set_text(ui->wx_days[i], b);
+        }
+    }
 }
 
 void ui_show_page(ui_elements_t *ui, int page) {
     lv_obj_add_flag(ui->page_main, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(ui->page_heat, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(ui->page_portal, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ui->page_weather, LV_OBJ_FLAG_HIDDEN);
     if (page == 2)      lv_obj_remove_flag(ui->page_portal, LV_OBJ_FLAG_HIDDEN);
     else if (page == 1) lv_obj_remove_flag(ui->page_heat, LV_OBJ_FLAG_HIDDEN);
+    else if (page == 3) lv_obj_remove_flag(ui->page_weather, LV_OBJ_FLAG_HIDDEN);
     else                lv_obj_remove_flag(ui->page_main, LV_OBJ_FLAG_HIDDEN);
 }

@@ -54,6 +54,15 @@ typedef struct {
     lv_obj_t *chart_info;      /* 今日/本月/30天 */
     lv_obj_t *chart_info2;     /* 日均/最高 */
 
+    /* ── Page 3: 天气 ── */
+    lv_obj_t *page_weather;
+    lv_obj_t *wx_title;        /* "天气 · 上海" */
+    lv_obj_t *wx_temp;         /* 大号温度 (Montserrat 20) */
+    lv_obj_t *wx_unit;         /* "度" 紧贴温度右侧 */
+    lv_obj_t *wx_desc;         /* 天气文字 + 湿度 */
+    lv_obj_t *wx_meta;         /* 更新时间 / 错误 */
+    lv_obj_t *wx_days[WX_DAYS];    /* 4 日预报行 */
+
     /* ── Page 2: 配网提示 ── */
     lv_obj_t *page_portal;
     lv_obj_t *portal_ap;

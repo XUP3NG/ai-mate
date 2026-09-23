@@ -79,12 +79,29 @@ typedef struct {
     int32_t  month_cents;
 } hist_info_t;
 
+/* ── 天气 (Open-Meteo, 免 Key) ── */
+#define WX_DAYS 4
+
+typedef struct {
+    bool     valid;
+    char     city[24];               /* 城市名 (显示用, 来自配置) */
+    int16_t  temp_x10;              /* 当前温度 (0.1°C) */
+    uint8_t  humidity;              /* 当前湿度 % */
+    uint8_t  code;                  /* 当前 WMO 天气码 */
+    uint8_t  dcode[WX_DAYS];        /* 每日 WMO 码 */
+    int16_t  tmax_x10[WX_DAYS];
+    int16_t  tmin_x10[WX_DAYS];
+    uint32_t last_ok_ms;
+    char     err[48];
+} weather_info_t;
+
 /* ── 全局应用状态 ── */
 typedef struct {
     net_state_t net;
     glm_info_t  glm;
     dsk_info_t  dsk;
     hist_info_t hist;
+    weather_info_t wx;
 
     bool     time_valid;        /* SNTP 已同步 */
     uint32_t boot_ms;           /* 开机毫秒 (用于显示运行时长) */

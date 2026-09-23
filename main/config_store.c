@@ -25,6 +25,7 @@ bool config_load(app_config_t *cfg) {
     sz = sizeof(cfg->glm_org);    nvs_get_str(h, "gorg",  cfg->glm_org, &sz);
     sz = sizeof(cfg->glm_project);nvs_get_str(h, "gproj", cfg->glm_project, &sz);
     sz = sizeof(cfg->dsk_key);    nvs_get_str(h, "dkey",  cfg->dsk_key, &sz);
+    sz = sizeof(cfg->wx_city);    nvs_get_str(h, "wcity", cfg->wx_city, &sz);
     uint8_t u8 = 0;
     if (nvs_get_u8(h, "gtype", &u8) == ESP_OK && (u8 == 1 || u8 == 2)) cfg->glm_type = u8;
     if (nvs_get_u8(h, "pmin", &u8) == ESP_OK && u8 >= 1 && u8 <= 60) cfg->poll_min = u8;
@@ -44,6 +45,7 @@ void config_save(const app_config_t *cfg) {
     nvs_set_str(h, "gorg",  cfg->glm_org);
     nvs_set_str(h, "gproj", cfg->glm_project);
     nvs_set_str(h, "dkey",  cfg->dsk_key);
+    nvs_set_str(h, "wcity", cfg->wx_city);
     nvs_set_u8(h, "gtype", cfg->glm_type);
     nvs_set_u8(h, "pmin",  cfg->poll_min);
     ESP_ERROR_CHECK(nvs_commit(h));

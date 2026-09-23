@@ -35,8 +35,8 @@ bool net_query_wifi_ok(void) { return wifi_is_connected(); }
 /* ── HTTP GET 工具 ── */
 #define HTTP_BUF 3072
 
-static int https_get(const char *url, const char *hdr_auth, const char *hdr_org,
-                     const char *hdr_proj, char *buf, size_t bufsz) {
+int net_https_get(const char *url, const char *hdr_auth, const char *hdr_org,
+                  const char *hdr_proj, char *buf, size_t bufsz) {
     esp_http_client_config_t cfg = {
         .url = url,
         .crt_bundle_attach = esp_crt_bundle_attach,
@@ -100,7 +100,7 @@ static void query_glm(app_state_t *st, const app_config_t *cfg) {
     char auth[110];
     snprintf(auth, sizeof(auth), "%s", cfg->glm_key);   /* raw key, 无 Bearer */
 
-    int n = https_get(url, auth, cfg->glm_org, cfg->glm_project, buf, sizeof(buf));
+    int n = net_https_get(url, auth, cfg->glm_org, cfg->glm_project, buf, sizeof(buf));
     if (n < 0) {
         strlcpy(st->glm.err, "网络/HTTP 失败", sizeof(st->glm.err));
         return;
@@ -201,7 +201,7 @@ static void query_dsk(app_state_t *st, const app_config_t *cfg) {
     char auth[110];
     snprintf(auth, sizeof(auth), "Bearer %s", cfg->dsk_key);
 
-    int n = https_get(DSK_URL, auth, NULL, NULL, buf, sizeof(buf));
+    int n = net_https_get(DSK_URL, auth, NULL, NULL, buf, sizeof(buf));
     if (n < 0) {
         strlcpy(st->dsk.err, "网络/HTTP 失败", sizeof(st->dsk.err));
         return;
@@ -362,7 +362,7 @@ void net_query_poll(app_state_t *state, const app_config_t *cfg) {
         ESP_LOGI(TAG, "DSK  总 %.2f  赠金 %.2f  充值 %.2f  (%s)  可用=%d",
                  state->dsk.total, state->dsk.granted, state->dsk.topped,
                  state->dsk.currency, (int)state->dsk.is_available);
-        ESP_LOGI(TAG, "HIST 今日 %.2f 元  本月 %.2f 元  (积分基准 dbase 见下轮)",
+        ESP_LOGI(TAG, "HIST 今日 %.2f 元  本月 %.2f 元",
                  state->hist.today_cents / 100.0, state->hist.month_cents / 100.0);
     } else {
         ESP_LOGW(TAG, "DSK  err: %s", state->dsk.err);

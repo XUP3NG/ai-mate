@@ -4,6 +4,7 @@ idf_component_register(
         "config_store.c"
         "wifi_mgr.c"
         "net_query.c"
+        "weather.c"
         "ui/ui.c"
         "ui/font_cjk_16.c"
     INCLUDE_DIRS

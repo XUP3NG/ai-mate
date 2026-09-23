@@ -20,6 +20,10 @@ void net_query_poll(app_state_t *state, const app_config_t *cfg);
 /* WiFi 是否已连上 */
 bool net_query_wifi_ok(void);
 
+/* 通用 HTTPS GET (weather 等模块复用): 返回 body 长度, <0 失败 */
+int net_https_get(const char *url, const char *hdr_auth, const char *hdr_org,
+                  const char *hdr_proj, char *buf, size_t bufsz);
+
 #ifdef __cplusplus
 }
 #endif

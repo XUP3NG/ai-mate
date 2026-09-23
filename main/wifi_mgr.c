@@ -1,4 +1,5 @@
 #include "wifi_mgr.h"
+#include "weather.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -158,6 +159,9 @@ static const char PORTAL_HTML[] =
 "<input name='gtype' value='1' placeholder='1=个人版, 2=团队版' required>"
 "<h2 style='margin-top:22px'>DeepSeek</h2>"
 "<label>API Key</label><input name='dkey' required>"
+"<h2 style='margin-top:22px'>天气 (选填)</h2>"
+"<label>城市 (如 上海, 留空不启用)</label><input name='wcity'>"
+"<h2 style='margin-top:22px'>其他</h2>"
 "<label>轮询间隔 (分钟)</label><input name='pmin' value='5'>"
 "<button type='submit'>保存并重启</button>"
 "<p><small>智谱 org/project: 浏览器登录 bigmodel.cn/coding-plan → F12 → Network → "
@@ -199,6 +203,7 @@ static esp_err_t portal_save(httpd_req_t *req) {
     form_field(body, "gorg", cfg.glm_org, sizeof(cfg.glm_org));
     form_field(body, "gproj", cfg.glm_project, sizeof(cfg.glm_project));
     form_field(body, "dkey", cfg.dsk_key, sizeof(cfg.dsk_key));
+    form_field(body, "wcity", cfg.wx_city, sizeof(cfg.wx_city));
     char tmp[8];
     form_field(body, "gtype", tmp, sizeof(tmp));
     if (tmp[0] == '2') cfg.glm_type = 2; else cfg.glm_type = 1;
@@ -216,6 +221,7 @@ static esp_err_t portal_save(httpd_req_t *req) {
 
     httpd_resp_send(req, SAVED_HTML, HTTPD_RESP_USE_STRLEN);
     config_save(&cfg);
+    weather_coords_clear();      /* 城市可能变更, 坐标重新定位 */
     ESP_LOGI(TAG, "portal: saved, restarting...");
     vTaskDelay(pdMS_TO_TICKS(800));
     esp_restart();

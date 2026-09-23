@@ -14,6 +14,7 @@
 #include "config_store.h"
 #include "wifi_mgr.h"
 #include "net_query.h"
+#include "weather.h"
 #include "ui/ui.h"
 #include "rlcd_display.h"
 #include "esp_lvgl_port.h"
@@ -99,6 +100,7 @@ static void net_task(void *arg) {
 
         ESP_LOGI(TAG, "poll round");
         net_query_poll(&s_state, &s_cfg);
+        weather_query(&s_state, &s_cfg);
 
         /* 时间未同步 (SNTP 未完成): 再等最多 10s 并补查一次, 保证消费历史有日期 */
         if (!s_state.time_valid) {
@@ -233,12 +235,14 @@ void app_main(void)
             last_bat = now;
         }
 
-        /* 页面轮播: 每 15s 切换 主页/热力图 */
+        /* 页面轮播: 每 15s 切换 主页/柱状图/天气 (未配城市跳过天气) */
         if (now - page_start > 15000) {
-            page = (page == 0) ? 1 : 0;
+            static const int order[] = { 0, 1, 3 };   /* 0=主页 1=柱状图 3=天气 (2=配网不参与轮播) */
+            int pages = s_cfg.wx_city[0] ? 3 : 2;
+            page = (page + 1) % pages;
             page_start = now;
             lvgl_port_lock(-1);
-            ui_show_page(&s_ui, page);
+            ui_show_page(&s_ui, order[page]);
             lvgl_port_unlock();
         }
 
