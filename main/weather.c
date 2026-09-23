@@ -324,7 +324,7 @@ void weather_query(app_state_t *st, const app_config_t *cfg) {
         wx->err[0] = '\0';
         wx->last_ok_ms = (uint32_t)(esp_timer_get_time() / 1000);
         ESP_LOGI(TAG, "%s: %s %.1f°C 湿%d%% | 明日 %s %.0f/%.0f°C",
-                 cfg->wx_city, wmo_text(wx->code), wx->temp_x10 / 10.0, wx->humidity,
+                 st->wx.city, wmo_text(wx->code), wx->temp_x10 / 10.0, wx->humidity,
                  wmo_text(wx->dcode[1]), wx->tmax_x10[1] / 10.0, wx->tmin_x10[1] / 10.0);
     } else {
         strlcpy(st->wx.err, "响应缺少数据", sizeof(st->wx.err));
