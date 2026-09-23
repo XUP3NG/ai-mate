@@ -46,13 +46,14 @@ const char *wmo_text(uint8_t code) {
 }
 
 const char *wmo_icon(uint8_t code) {
-    /* U+2600 ☀  U+2601 ☁  U+2602 ☂  U+2614 ☔  U+2744 ❄  U+26A1 ⚡  U+2637 ☽? 用☰表雾 */
-    if (code <= 1)        return "\xE2\x98\x80";          /* ☀ */
-    if (code == 2 || code == 3) return "\xE2\x98\x81";    /* ☁ */
-    if (code >= 45 && code <= 57) return "\xE2\x98\xB0";  /* ☰ 雾 */
-    if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return "\xE2\x98\x82"; /* ☂ */
-    if ((code >= 71 && code <= 77) || code == 85 || code == 86) return "\xE2\x9D\x84";   /* ❄ */
-    if (code >= 95)       return "\xE2\x9A\xA1";          /* ⚡ */
+    /* U+2600 ☀  U+2601 ☁  U+2602 ☂  U+2614 ☔  U+2630 ☰(雾)  U+2744 ❄  U+26A1 ⚡ */
+    if (code <= 1)        return "\xE2\x98\x80";          /* ☀ 晴 */
+    if (code == 2 || code == 3) return "\xE2\x98\x81";    /* ☁ 多云/阴 */
+    if (code == 45 || code == 48) return "\xE2\x98\xB0";  /* ☰ 雾 */
+    if (code >= 51 && code <= 57) return "\xE2\x98\x94";  /* ☔ 毛毛雨/冻毛毛雨 */
+    if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return "\xE2\x98\x82"; /* ☂ 雨 */
+    if ((code >= 71 && code <= 77) || code == 85 || code == 86) return "\xE2\x9D\x84";   /* ❄ 雪 */
+    if (code >= 95)       return "\xE2\x9A\xA1";          /* ⚡ 雷雨 */
     return "\xE2\x98\x81";
 }
 
