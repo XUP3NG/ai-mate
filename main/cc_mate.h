@@ -105,6 +105,7 @@ typedef struct {
 
     bool     time_valid;        /* SNTP 已同步 */
     uint32_t boot_ms;           /* 开机毫秒 (用于显示运行时长) */
+    char     ssid[33];          /* 当前 WiFi SSID (显示用) */
 
     /* 配网门户信息 */
     char     ap_ssid[24];

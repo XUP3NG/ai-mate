@@ -475,13 +475,19 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
     /* ── 底部状态 ── */
     {
         uint32_t g = s->glm.last_ok_ms, d = s->dsk.last_ok_ms;
+        char when[40] = "";
         if (g || d) {
             uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
             uint32_t latest = g > d ? g : d;
             uint32_t mins = (now - latest) / 60000;
-            if (mins == 0) snprintf(b, sizeof(b), "数据已更新");
-            else snprintf(b, sizeof(b), "更新于 %" PRIu32 " 分钟前", mins);
-        } else snprintf(b, sizeof(b), "等待数据...");
+            if (mins == 0) snprintf(when, sizeof(when), "刚更新");
+            else snprintf(when, sizeof(when), "更新于 %" PRIu32 " 分钟前", mins);
+        } else snprintf(when, sizeof(when), "等待数据...");
+
+        if (s->ssid[0] && s->net == NET_CONNECTED)
+            snprintf(b, sizeof(b), "%s · %s", s->ssid, when);
+        else
+            snprintf(b, sizeof(b), "%s", when);
         lv_label_set_text(ui->status_label, b);
     }
 

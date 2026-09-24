@@ -13,6 +13,7 @@
 
 #include "config_store.h"
 #include "cc_mate.h"
+#include "esp_wifi.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,8 +21,14 @@ extern "C" {
 
 void wifi_mgr_init(void);
 bool wifi_is_connected(void);            /* STA 是否拿到 IP */
-/* 尝试用已存配置连接 STA (异步) */
-void wifi_mgr_connect(const app_config_t *cfg);
+/* 连接: 优先试 last_ssid, 否则扫描附近热点, 选已保存网络中信号最好的接入 */
+void wifi_mgr_connect_best(const app_config_t *cfg);
+/* 主循环调用: 若断线重试已耗尽, 扫描并切换到其他已保存网络 (阻塞 ~2s) */
+void wifi_mgr_poll_rescan(void);
+/* 当前 SSID (未连接时为空串) */
+const char *wifi_mgr_current_ssid(void);
+/* 扫描附近热点; 返回数量, 结果写入 out (最多 max 条) */
+int wifi_mgr_scan_ap(wifi_ap_record_t *out, int max);
 /* 启动 AP 配网门户 (阻塞至配置保存后重启); 只能在主任务调用 */
 void wifi_mgr_start_portal(app_config_t *cfg);
 /* 线程安全: 请求切入门户 (可在事件回调调用) */

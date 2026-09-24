@@ -206,7 +206,7 @@ void app_main(void)
 
     s_state.net = NET_CONNECTING;
     net_query_init_time();
-    wifi_mgr_connect(&s_cfg);
+    wifi_mgr_connect_best(&s_cfg);   /* 扫描并连接信号最好的已保存网络 */
 
     xTaskCreatePinnedToCore(net_task, "net", 12288, NULL, 5, NULL, 1);
     xTaskCreatePinnedToCore(boot_key_task, "bootkey", 3072, NULL, 3, NULL, 0);
@@ -221,13 +221,18 @@ void app_main(void)
         /* WiFi 状态: 连接 > 射频休眠 > 连接中 */
         if (net_query_wifi_ok()) s_state.net = NET_CONNECTED;
         else if (!wifi_mgr_radio_on()) s_state.net = NET_RADIO_SLEEP;
-        else if (s_state.net != NET_RADIO_SLEEP) s_state.net = NET_CONNECTING;
         else s_state.net = NET_CONNECTING;
+
+        /* 当前 SSID (状态栏显示) */
+        strlcpy(s_state.ssid, wifi_mgr_current_ssid(), sizeof(s_state.ssid));
 
         /* 事件回调请求的配网切换 (在主任务执行, 回调内不可阻塞) */
         if (wifi_mgr_poll_portal()) {
             /* 不会到达: portal 常驻直至保存重启 */
         }
+
+        /* 断线重试耗尽 → 扫描换用其他已保存网络 (阻塞 ~2s) */
+        wifi_mgr_poll_rescan();
 
         /* 电池: 每 30s (WiFi 模式下电流波动小) */
         if (now - last_bat > 30000) {
