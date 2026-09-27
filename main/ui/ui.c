@@ -408,8 +408,10 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
         default:              lv_label_set_text(ui->wifi_label, "离线");   break;
     }
 
-    if (s->battery_configured) snprintf(b, sizeof(b), "%d%%", s->battery_pct);
-    else b[0] = '\0';
+    if (s->battery_configured) {
+        if (s->battery_charging) snprintf(b, sizeof(b), "CHG");
+        else snprintf(b, sizeof(b), "%d%%", s->battery_pct);
+    } else b[0] = '\0';
     lv_label_set_text(ui->bat_label, b);
 
     /* ── 智谱卡片 ── */
@@ -475,22 +477,36 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
         lv_label_set_text(ui->dsk_err, s->dsk.err[0] ? s->dsk.err : "查询中...");
     }
 
-    /* ── 底部状态 ── */
+    /* ── 底部状态: [SSID ·] [电压 ·] 更新时间 ── */
     {
         uint32_t g = s->glm.last_ok_ms, d = s->dsk.last_ok_ms;
-        char when[40] = "";
+        char seg[4][48];
+        int nseg = 0;
+
+        if (s->ssid[0] && s->net == NET_CONNECTED)
+            snprintf(seg[nseg++], sizeof(seg[0]), "%s", s->ssid);
+
+        if (s->battery_configured) {
+            if (s->battery_charging)
+                snprintf(seg[nseg++], sizeof(seg[0]), "%.2fV 充电", s->battery_mv / 1000.0);
+            else
+                snprintf(seg[nseg++], sizeof(seg[0]), "%.2fV %d%%",
+                         s->battery_mv / 1000.0, s->battery_pct);
+        }
+
         if (g || d) {
             uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
             uint32_t latest = g > d ? g : d;
             uint32_t mins = (now - latest) / 60000;
-            if (mins == 0) snprintf(when, sizeof(when), "刚更新");
-            else snprintf(when, sizeof(when), "更新于 %" PRIu32 " 分钟前", mins);
-        } else snprintf(when, sizeof(when), "等待数据...");
+            if (mins == 0) snprintf(seg[nseg++], sizeof(seg[0]), "刚更新");
+            else snprintf(seg[nseg++], sizeof(seg[0]), "更新于 %" PRIu32 " 分钟前", mins);
+        } else {
+            snprintf(seg[nseg++], sizeof(seg[0]), "等待数据...");
+        }
 
-        if (s->ssid[0] && s->net == NET_CONNECTED)
-            snprintf(b, sizeof(b), "%s · %s", s->ssid, when);
-        else
-            snprintf(b, sizeof(b), "%s", when);
+        int pos = 0;
+        for (int i = 0; i < nseg; i++)
+            pos += snprintf(b + pos, sizeof(b) - pos, "%s%s", i ? " · " : "", seg[i]);
         lv_label_set_text(ui->status_label, b);
     }
 

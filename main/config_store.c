@@ -11,6 +11,7 @@ void config_defaults(app_config_t *cfg) {
     memset(cfg, 0, sizeof(*cfg));
     cfg->glm_type = 1;      /* 个人版 */
     cfg->poll_min = 5;
+    cfg->bat_div_x100 = 300; /* 默认分压比 3.00 */
 }
 
 /* ── WiFi 列表操作 ── */
@@ -74,6 +75,9 @@ bool config_load(app_config_t *cfg) {
     uint8_t u8 = 0;
     if (nvs_get_u8(h, "gtype", &u8) == ESP_OK && (u8 == 1 || u8 == 2)) cfg->glm_type = u8;
     if (nvs_get_u8(h, "pmin", &u8) == ESP_OK && u8 >= 1 && u8 <= 60) cfg->poll_min = u8;
+    uint16_t u16 = 0;
+    if (nvs_get_u16(h, "bdiv", &u16) == ESP_OK && u16 >= 100 && u16 <= 1000)
+        cfg->bat_div_x100 = u16;
 
     /* WiFi 列表 */
     u8 = 0;
@@ -122,6 +126,7 @@ void config_save(const app_config_t *cfg) {
     nvs_set_str(h, "wcity", cfg->wx_city);
     nvs_set_u8(h, "gtype", cfg->glm_type);
     nvs_set_u8(h, "pmin",  cfg->poll_min);
+    nvs_set_u16(h, "bdiv", cfg->bat_div_x100 ? cfg->bat_div_x100 : 300);
 
     /* WiFi 列表 + 首选 */
     uint8_t n = cfg->net_count > CFG_NET_MAX ? CFG_NET_MAX : cfg->net_count;

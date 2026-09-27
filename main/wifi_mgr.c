@@ -345,10 +345,14 @@ static void build_portal_html(void) {
     append(&p, &left,
         "<h2 style='margin-top:22px'>其他</h2>"
         "<label>轮询间隔 (分钟)</label><input name='pmin' value='%d'>"
+        "<label>电池分压比 ×100 (默认 300=3.00; 电量显示偏差时校准, 留空不变)</label>"
+        "<input name='bdiv' value='%u'>"
         "<button type='submit'>保存并重启</button>"
         "<p><small>智谱 org/project: 浏览器登录 bigmodel.cn/coding-plan → F12 → Network → "
         "找 quota/limit 请求头 bigmodel-organization / bigmodel-project</small></p>"
-        "</form></body></html>", s_cfg.poll_min);
+        "<p><small>电量不准时: 串口日志会打印 BAT pin=xxxmV; 用万用表量电池实际电压, "
+        "分压比 = 实际电压 / pin 电压 (如量到 3.90V, pin 读数 1.30V → 填 300)</small></p>"
+        "</form></body></html>", s_cfg.poll_min, s_cfg.bat_div_x100 ? s_cfg.bat_div_x100 : 300);
 }
 
 static const char SAVED_HTML[] =
@@ -417,6 +421,9 @@ static esp_err_t portal_save(httpd_req_t *req) {
     form_field(body, "pmin", tmp, sizeof(tmp));
     int pm = atoi(tmp);
     if (pm >= 1 && pm <= 60) cfg.poll_min = (uint8_t)pm;
+    form_field(body, "bdiv", tmp, sizeof(tmp));
+    int bd = atoi(tmp);
+    if (bd >= 100 && bd <= 1000) cfg.bat_div_x100 = (uint16_t)bd;
 
     /* 供运行时使用的 "当前网络" */
     strlcpy(cfg.wifi_ssid, cfg.last_ssid[0] ? cfg.last_ssid : cfg.net_ssid[0], sizeof(cfg.wifi_ssid));

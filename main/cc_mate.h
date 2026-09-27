@@ -113,6 +113,8 @@ typedef struct {
 
     bool     battery_configured;
     uint8_t  battery_pct;
+    uint16_t battery_mv;         /* 电池电压 mV (开路电压, 射频关闭时采样) */
+    bool     battery_charging;
 } app_state_t;
 
 #ifdef __cplusplus

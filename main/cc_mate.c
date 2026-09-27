@@ -37,13 +37,33 @@ static app_config_t s_cfg;
 static app_state_t  s_state;
 static ui_elements_t s_ui;
 
-/* ── 电池 ADC (可选) ── */
+/* ── 电池 ADC ──
+ *
+ * 采样要点:
+ *   1. 只在射频关闭时采 (WiFi 发射瞬间电压会掉 0.1~0.2V, 放电曲线用的是开路电压 OCV)
+ *   2. 多采样 + 丢弃前几次 (ADC 首次转换偏差大)
+ *   3. 电量用 OCV 查表插值, 不用线性映射 (锂电 3.7~3.95V 是平台区, 线性会差 30%+)
+ *   4. 分压比可在配网页校准 (不同板子 1:2 / 1:3 不一)
+ */
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 
 #define BAT_ADC_CHANNEL  ADC_CHANNEL_3   /* GPIO2 */
 #define BAT_ADC_UNIT     ADC_UNIT_1
+#define BAT_SAMPLES      16
+#define BAT_DISCARD      4
+
+typedef struct { uint16_t mv; uint8_t pct; } soc_point_t;
+/* 单体锂电开路电压 → 剩余电量 (轻载实测经验曲线) */
+static const soc_point_t SOC_CURVE[] = {
+    { 4200, 100 }, { 4150, 95 }, { 4110, 90 }, { 4080, 85 }, { 4020, 80 },
+    { 3980, 75 },  { 3940, 70 }, { 3910, 65 }, { 3870, 60 }, { 3840, 55 },
+    { 3820, 50 },  { 3800, 45 }, { 3790, 40 }, { 3780, 35 }, { 3770, 30 },
+    { 3760, 25 },  { 3740, 20 }, { 3720, 15 }, { 3680, 10 }, { 3610, 5  },
+    { 3500, 3  },  { 3300, 0  },
+};
+#define SOC_N (sizeof(SOC_CURVE) / sizeof(SOC_CURVE[0]))
 
 static adc_oneshot_unit_handle_t s_adc1 = NULL;
 static adc_cali_handle_t s_adc1_cali = NULL;
@@ -62,23 +82,60 @@ static void bat_adc_init(void) {
     s_state.battery_configured = true;
 }
 
-static uint8_t bat_read_level(void) {
+/* 采样一次, 返回 ADC 引脚上的电压 mV (0 = 失败) */
+static uint32_t bat_read_pin_mv(void) {
     if (!s_adc1) return 0;
-    int raw_sum = 0;
-    for (int i = 0; i < 8; i++) {
+    int sum = 0, n = 0;
+    for (int i = 0; i < BAT_SAMPLES; i++) {
         int raw = 0;
-        if (adc_oneshot_read(s_adc1, BAT_ADC_CHANNEL, &raw) == ESP_OK) raw_sum += raw;
+        if (adc_oneshot_read(s_adc1, BAT_ADC_CHANNEL, &raw) == ESP_OK && i >= BAT_DISCARD) {
+            sum += raw;
+            n++;
+        }
         vTaskDelay(pdMS_TO_TICKS(2));
     }
+    if (!n) return 0;
     int mv = 0;
-    adc_cali_raw_to_voltage(s_adc1_cali, raw_sum / 8, &mv);
-    float vbat = mv * 0.001f * 3.0f;
-    if (vbat <= 3.0f) return 0;
-    if (vbat >= 4.12f) return 100;
-    static float s_vbat_ema = -1.0f;
-    if (s_vbat_ema < 0) s_vbat_ema = vbat;
-    else s_vbat_ema = s_vbat_ema * 0.85f + vbat * 0.15f;
-    return (uint8_t)((s_vbat_ema - 3.0f) / (4.12f - 3.0f) * 100.0f);
+    if (adc_cali_raw_to_voltage(s_adc1_cali, sum / n, &mv) != ESP_OK) return 0;
+    return (uint32_t)(mv < 0 ? 0 : mv);
+}
+
+/* OCV → 电量: 查表 + 线性插值 */
+static uint8_t bat_pct_from_mv(uint32_t pack_mv) {
+    if (pack_mv >= SOC_CURVE[0].mv) return 100;
+    if (pack_mv <= SOC_CURVE[SOC_N - 1].mv) return 0;
+    for (size_t i = 0; i + 1 < SOC_N; i++) {
+        uint16_t hi = SOC_CURVE[i].mv, lo = SOC_CURVE[i + 1].mv;
+        if (pack_mv <= hi && pack_mv >= lo) {
+            uint8_t phi = SOC_CURVE[i].pct, plo = SOC_CURVE[i + 1].pct;
+            uint32_t num = (uint32_t)(pack_mv - lo) * (phi - plo);
+            return (uint8_t)(plo + num / (hi - lo));
+        }
+    }
+    return 0;
+}
+
+/* 读一次电池: 更新 s_state 的电压与电量 (分压比可配, 默认 3.00) */
+static void bat_update(void) {
+    uint32_t pin_mv = bat_read_pin_mv();
+    if (pin_mv == 0) return;
+
+    uint32_t div100 = s_cfg.bat_div_x100 ? s_cfg.bat_div_x100 : 300;
+    uint32_t pack_mv = pin_mv * div100 / 100;
+
+    /* 电压做 EMA 平滑 (负载/温度抖动), 电量由平滑后电压查表得出 */
+    static float s_mv_ema = -1.0f;
+    if (s_mv_ema < 0) s_mv_ema = (float)pack_mv;
+    else s_mv_ema = s_mv_ema * 0.7f + (float)pack_mv * 0.3f;
+
+    s_state.battery_mv = (uint16_t)s_mv_ema;
+    s_state.battery_pct = bat_pct_from_mv((uint32_t)s_mv_ema);
+    /* 充电判定: 电压接近满充且高于平台区 */
+    s_state.battery_charging = (s_mv_ema >= 4150.0f);
+
+    ESP_LOGI(TAG, "BAT pin=%" PRIu32 "mV pack=%.0fmV pct=%u%%%s",
+             pin_mv, s_mv_ema, s_state.battery_pct,
+             s_state.battery_charging ? " (charging)" : "");
 }
 
 /* ── 查询任务 (方案B: 查完断网省电) ──
@@ -235,9 +292,9 @@ void app_main(void)
         /* 断线重试耗尽 → 扫描换用其他已保存网络 (阻塞 ~2s) */
         wifi_mgr_poll_rescan();
 
-        /* 电池: 每 30s (WiFi 模式下电流波动小) */
-        if (now - last_bat > 30000) {
-            s_state.battery_pct = bat_read_level();
+        /* 电池: 每 30s, 且只在射频关闭时采 (WiFi 发射会拉低电压, 影响 OCV 判读) */
+        if (now - last_bat > 30000 && !wifi_mgr_radio_on()) {
+            bat_update();
             last_bat = now;
         }
 

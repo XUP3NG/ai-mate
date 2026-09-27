@@ -42,6 +42,9 @@ typedef struct {
 
     /* ── 轮询间隔 (分钟, 1–60) ── */
     uint8_t  poll_min;
+
+    /* ── 电池分压比 ×100 (默认 300 = 3.00; 用于校准电量显示) ── */
+    uint16_t bat_div_x100;
 } app_config_t;
 
 void config_defaults(app_config_t *cfg);
