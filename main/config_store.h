@@ -39,6 +39,10 @@ typedef struct {
 
     /* ── 天气 (Open-Meteo 免 Key, 城市名留空=IP 自动定位) ── */
     char     wx_city[24];
+    /* ── 和风天气 (API Host + API Key; 两者都填才启用, 否则用 Open-Meteo) ── */
+    char     qw_host[64];
+    char     qw_key[48];
+    uint8_t  wx_min;            /* 天气刷新间隔 (分钟), 与轮询解耦 */
 
     /* ── 轮询间隔 (分钟, 1–60) ── */
     uint8_t  poll_min;

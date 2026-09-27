@@ -319,7 +319,7 @@ void ui_init(ui_elements_t *ui) {
 
     ui->wx_footer = label(ui->page_weather, 14, 240, 372);
     lv_obj_set_style_text_color(ui->wx_footer, c_dim(), 0);
-    lv_label_set_text(ui->wx_footer, "数据源 Open-Meteo");
+    lv_label_set_text(ui->wx_footer, "");
 
     /* ════ Page 2: 配网提示 ════ */
     ui->page_portal = lv_obj_create(scr);
@@ -593,14 +593,21 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
     {
         lv_label_set_text(ui->wx_city, s->wx.city[0] ? s->wx.city : "定位中...");
 
+        /* 数据来源标注 (和风条款要求注明来源) */
+        if (s->wx.src[0])
+            snprintf(b, sizeof(b), "数据源 %s", s->wx.src);
+        else
+            snprintf(b, sizeof(b), "数据源 Open-Meteo");
+        lv_label_set_text(ui->wx_footer, b);
+
         if (s->wx.valid) {
-            lv_label_set_text(ui->wx_icon, wmo_icon(s->wx.code));
+            lv_label_set_text(ui->wx_icon, s->wx.icon);
 
             snprintf(b, sizeof(b), "%.1f", s->wx.temp_x10 / 10.0);
             lv_label_set_text(ui->wx_temp, b);
             lv_obj_align_to(ui->wx_unit, ui->wx_temp, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -6);
 
-            lv_label_set_text(ui->wx_desc, wmo_text(s->wx.code));
+            lv_label_set_text(ui->wx_desc, s->wx.text);
             snprintf(b, sizeof(b), "湿度 %d%%", s->wx.humidity);
             lv_label_set_text(ui->wx_hum, b);
 
@@ -633,7 +640,7 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
             lv_label_set_text(ui->wx_day[i], day);
 
             lv_label_set_text(ui->wx_day_icon[i],
-                              s->wx.valid ? wmo_icon(s->wx.dcode[i]) : "");
+                              s->wx.valid ? s->wx.dicon[i] : "");
 
             if (s->wx.valid)
                 snprintf(b, sizeof(b), "%.0f/%.0f",

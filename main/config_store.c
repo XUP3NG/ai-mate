@@ -11,6 +11,7 @@ void config_defaults(app_config_t *cfg) {
     memset(cfg, 0, sizeof(*cfg));
     cfg->glm_type = 1;      /* 个人版 */
     cfg->poll_min = 5;
+    cfg->wx_min = 30;       /* 天气刷新 30 分钟 (与轮询解耦, 省配额) */
     cfg->bat_div_x100 = 300; /* 默认分压比 3.00 */
 }
 
@@ -72,9 +73,12 @@ bool config_load(app_config_t *cfg) {
     sz = sizeof(cfg->glm_project);nvs_get_str(h, "gproj", cfg->glm_project, &sz);
     sz = sizeof(cfg->dsk_key);    nvs_get_str(h, "dkey",  cfg->dsk_key, &sz);
     sz = sizeof(cfg->wx_city);    nvs_get_str(h, "wcity", cfg->wx_city, &sz);
+    sz = sizeof(cfg->qw_host);    nvs_get_str(h, "qwhost", cfg->qw_host, &sz);
+    sz = sizeof(cfg->qw_key);     nvs_get_str(h, "qwkey",  cfg->qw_key, &sz);
     uint8_t u8 = 0;
     if (nvs_get_u8(h, "gtype", &u8) == ESP_OK && (u8 == 1 || u8 == 2)) cfg->glm_type = u8;
     if (nvs_get_u8(h, "pmin", &u8) == ESP_OK && u8 >= 1 && u8 <= 60) cfg->poll_min = u8;
+    if (nvs_get_u8(h, "wmin", &u8) == ESP_OK && u8 >= 5 && u8 <= 240) cfg->wx_min = u8;
     uint16_t u16 = 0;
     if (nvs_get_u16(h, "bdiv", &u16) == ESP_OK && u16 >= 100 && u16 <= 1000)
         cfg->bat_div_x100 = u16;
@@ -124,8 +128,11 @@ void config_save(const app_config_t *cfg) {
     nvs_set_str(h, "gproj", cfg->glm_project);
     nvs_set_str(h, "dkey",  cfg->dsk_key);
     nvs_set_str(h, "wcity", cfg->wx_city);
+    nvs_set_str(h, "qwhost", cfg->qw_host);
+    nvs_set_str(h, "qwkey",  cfg->qw_key);
     nvs_set_u8(h, "gtype", cfg->glm_type);
     nvs_set_u8(h, "pmin",  cfg->poll_min);
+    nvs_set_u8(h, "wmin",  cfg->wx_min ? cfg->wx_min : 30);
     nvs_set_u16(h, "bdiv", cfg->bat_div_x100 ? cfg->bat_div_x100 : 300);
 
     /* WiFi 列表 + 首选 */

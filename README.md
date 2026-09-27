@@ -92,14 +92,15 @@ ESP32-S3 + 4.2" 反射式墨水屏（400×300 纯黑白），**WiFi 直连**查�
 
 全部为 HTTPS + API Key，**不需要账号登录、不需要 userToken**（不会过期）。
 
-| 数据 | 接口 | 认证 |
-|------|------|------|
-| 智谱额度 | `GET https://bigmodel.cn/api/monitor/usage/quota/limit?type=1` | `Authorization: <api key>`（raw，无 Bearer）+ `bigmodel-organization` + `bigmodel-project` |
-| DeepSeek 余额 | `GET https://api.deepseek.com/user/balance` | `Authorization: Bearer <api key>` |
-| 天气预报 | `GET https://api.open-meteo.com/v1/forecast` | 无需 Key |
-| 城市定位 | `GET https://geocoding-api.open-meteo.com/v1/search` | 无需 Key |
-| IP 定位 | `http://ip-api.com/json/`（主）/ `https://api.ip.sb/geoip`（备） | 无需 Key |
-| 时间 | SNTP `ntp.aliyun.com` / `pool.ntp.org` | — |
+| 数据 | 接口 |
+|------|------|
+| 智谱额度 | `GET https://bigmodel.cn/api/monitor/usage/quota/limit?type=1`，Header: `Authorization`(raw key) + `bigmodel-organization` + `bigmodel-project` |
+| DeepSeek 余额 | `GET https://api.deepseek.com/user/balance`，Header: `Authorization: Bearer <key>` |
+| 天气（默认） | `GET https://api.open-meteo.com/v1/forecast`（免 Key） |
+| 天气（可选） | `GET https://<你的API Host>/weather/v1/current/{lat}/{lon}` 与 `/weather/v1/daily/{lat}/{lon}`，Header: `X-QW-Api-Key`（和风天气） |
+| 城市定位 | `GET https://geocoding-api.open-meteo.com/v1/search`（免 Key） |
+| IP 定位 | `http://ip-api.com/json/`（主）/ `https://api.ip.sb/geoip`（备），免 Key |
+| 时间 | SNTP `ntp.aliyun.com` / `pool.ntp.org` |
 
 **智谱 org/project 获取方法**：浏览器登录 `bigmodel.cn/coding-plan` → F12 → Network → 找 `quota/limit` 请求 → 复制请求头的 `bigmodel-organization` 与 `bigmodel-project`。`type=1` 个人版，`type=2` 团队版。
 
@@ -121,12 +122,25 @@ ESP32-S3 + 4.2" 反射式墨水屏（400×300 纯黑白），**WiFi 直连**查�
 
 ## 天气与定位
 
+**双数据源**（配网页填了和风参数就用和风，留空自动用 Open-Meteo）：
+
+| 数据源 | 是否需要 Key | 特点 | 计费 |
+|---|---|---|---|
+| Open-Meteo（默认） | 不需要 | 全球覆盖，国内精度一般 | 免费无配额 |
+| [和风天气](https://dev.qweather.com) | 需 API Host + API Key | 国内 1 公里分辨率、分钟级更新、中文天气现象 | 每自然月**前 5 万次免费**，之后 ¥0.0007/次 |
+
+天气刷新与轮询**解耦**：默认 30 分钟一次（配网页可调 5–240 分钟）。按默认设置约 **1,440 次/月**，仅占和风免费额度的 3%。
+
+> 数据来源标注：使用和风天气时，天气页页脚显示「数据源 和风天气」（这是和风[服务条款](https://dev.qweather.com/docs/terms/attribution/)的要求）。
+
+**定位**：
+
 | 配网页「城市」字段 | 行为 |
 |---|---|
 | **留空**（默认） | IP 自动定位（`ip-api.com` 主、`ip.sb` 备），坐标缓存 **24 小时**，换网络自动跟随 |
-| 填写城市名（如 `上海`） | Open-Meteo geocoding 精确定位，坐标永久缓存 |
+| 填写城市名（如 `上海`） | geocoding 精确定位，坐标永久缓存 |
 
-天气码（WMO）映射为中文描述与图标；当前天气 36px 图标、预报 24px 图标。
+两源共用同一套经纬度，无需额外查询。
 
 ---
 
@@ -173,7 +187,10 @@ ESP32-S3 + 4.2" 反射式墨水屏（400×300 纯黑白），**WiFi 直连**查�
    - 智谱 API Key、Organization ID、Project ID、套餐类型（1 个人 / 2 团队）
    - DeepSeek API Key
    - 城市（可选，留空 = IP 自动定位）
+   - 和风 API Host / API Key（可选，留空 = 用免费 Open-Meteo）
+   - 天气刷新间隔（分钟，5–240，默认 30）
    - 轮询间隔（分钟，1–60）
+   - 电池分压比（默认 3.00，电量显示偏差时校准）
 5. 保存 → 写入 NVS → 自动重启连接；勾选「清除所有已保存的 WiFi」可重置网络列表
 
 > 设备重启后会自动迁移旧版单网络配置，无需重新配网。
@@ -223,7 +240,7 @@ components/rlcd_display/  # ST7305 驱动 + LVGL 桥接
 
 | 命名空间 | 键 |
 |---|---|
-| `ai_mate` | `gkey` `gorg` `gproj` `dkey` `wcity` `gtype` `pmin` · WiFi: `nnet` `s0..s3` `p0..p3` `last`（+ 兼容旧字段 `ssid` `pass`） |
+| `ai_mate` | `gkey` `gorg` `gproj` `dkey` `gtype` `pmin` · 天气: `wcity` `qwhost` `qwkey` `wmin` · 电池: `bdiv` · WiFi: `nnet` `s0..s3` `p0..p3` `last`（+ 兼容旧字段 `ssid` `pass`） |
 | `ai_hist` | `cents`(63 天消费) `base` `dbase` `rechg` `lbal` `lepo` `wxlat` `wxlon` `wxcity2` `wxepo` |
 
 ---
@@ -269,7 +286,9 @@ npx lv_font_conv --font C:/Windows/Fonts/simhei.ttf --symbols "0123456789./-" \
 - 每日消费、本月消费、柱状图均为**设备观测推算值**，非平台官方数据
 - IP 定位为城市级（运营商出口），要精确到区请手填城市名
 - ESP32 仅支持 **2.4GHz** WiFi
-- 天气为 Open-Meteo 数据源，国内精度一般；如需更准可换高德/和风（需 Key）
+- 天气为 Open-Meteo 或和风天气；国内精度要求高请在配网页填和风 API Host + Key
+- 使用和风天气时需保留页脚的数据来源标注（服务条款要求）
+- 电量由开路电压查表估算，充电中读数会略偏乐观（充电电压高于静置电压）
 
 ## 致谢
 

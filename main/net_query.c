@@ -35,8 +35,9 @@ bool net_query_wifi_ok(void) { return wifi_is_connected(); }
 /* ── HTTP GET 工具 ── */
 #define HTTP_BUF 3072
 
-int net_https_get(const char *url, const char *hdr_auth, const char *hdr_org,
-                  const char *hdr_proj, char *buf, size_t bufsz) {
+int net_https_get_ex(const char *url, const char *hdr_auth, const char *hdr_org,
+                     const char *hdr_proj, const char *hdr_xkey,
+                     char *buf, size_t bufsz) {
     esp_http_client_config_t cfg = {
         .url = url,
         .crt_bundle_attach = esp_crt_bundle_attach,
@@ -47,6 +48,7 @@ int net_https_get(const char *url, const char *hdr_auth, const char *hdr_org,
     if (hdr_auth) esp_http_client_set_header(cl, "Authorization", hdr_auth);
     if (hdr_org)  esp_http_client_set_header(cl, "bigmodel-organization", hdr_org);
     if (hdr_proj) esp_http_client_set_header(cl, "bigmodel-project", hdr_proj);
+    if (hdr_xkey) esp_http_client_set_header(cl, "X-QW-Api-Key", hdr_xkey);
     esp_http_client_set_header(cl, "Accept-Encoding", "identity");
     esp_http_client_set_header(cl, "Accept", "application/json, text/plain, */*");
     esp_http_client_set_header(cl, "User-Agent", "Mozilla/5.0 (compatible; AI-Mate/1.0)");
@@ -71,6 +73,12 @@ int net_https_get(const char *url, const char *hdr_auth, const char *hdr_org,
         return -2;
     }
     return n;
+}
+
+/* 旧签名包装 (不带自定义头) */
+int net_https_get(const char *url, const char *hdr_auth, const char *hdr_org,
+                  const char *hdr_proj, char *buf, size_t bufsz) {
+    return net_https_get_ex(url, hdr_auth, hdr_org, hdr_proj, NULL, buf, bufsz);
 }
 
 /* ── 智谱 GLM Coding Plan ── */

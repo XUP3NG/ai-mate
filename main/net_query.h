@@ -27,6 +27,11 @@ bool net_query_wifi_ok(void);
 int net_https_get(const char *url, const char *hdr_auth, const char *hdr_org,
                   const char *hdr_proj, char *buf, size_t bufsz);
 
+/* 同上, 额外支持一个自定义请求头 (如和风的 X-QW-Api-Key) */
+int net_https_get_ex(const char *url, const char *hdr_auth, const char *hdr_org,
+                     const char *hdr_proj, const char *hdr_xkey,
+                     char *buf, size_t bufsz);
+
 #ifdef __cplusplus
 }
 #endif

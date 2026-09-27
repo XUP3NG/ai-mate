@@ -339,8 +339,12 @@ static void build_portal_html(void) {
 
     append(&p, &left,
         "<h2 style='margin-top:22px'>天气 (选填)</h2>"
-        "<label>城市 (如 上海; 留空 = 按 IP 自动定位)</label><input name='wcity' value=\"%s\">",
-        s_cfg.wx_city);
+        "<label>城市 (如 上海; 留空 = 按 IP 自动定位)</label><input name='wcity' value=\"%s\">"
+        "<label>和风 API Host (留空 = 用免费 Open-Meteo)</label>"
+        "<input name='qwhost' value=\"%s\" placeholder='xxxxxx.qweatherapi.com'>"
+        "<label>和风 API Key</label><input name='qwkey' value=\"%s\">"
+        "<label>天气刷新间隔 (分钟, 5–240)</label><input name='wmin' value='%d'>",
+        s_cfg.wx_city, s_cfg.qw_host, s_cfg.qw_key, s_cfg.wx_min ? s_cfg.wx_min : 30);
 
     append(&p, &left,
         "<h2 style='margin-top:22px'>其他</h2>"
@@ -416,6 +420,8 @@ static esp_err_t portal_save(httpd_req_t *req) {
     form_field(body, "gproj", cfg.glm_project, sizeof(cfg.glm_project));
     form_field(body, "dkey", cfg.dsk_key, sizeof(cfg.dsk_key));
     form_field(body, "wcity", cfg.wx_city, sizeof(cfg.wx_city));
+    form_field(body, "qwhost", cfg.qw_host, sizeof(cfg.qw_host));
+    form_field(body, "qwkey", cfg.qw_key, sizeof(cfg.qw_key));
     form_field(body, "gtype", tmp, sizeof(tmp));
     if (tmp[0] == '2') cfg.glm_type = 2; else if (tmp[0] == '1') cfg.glm_type = 1;
     form_field(body, "pmin", tmp, sizeof(tmp));
@@ -424,6 +430,9 @@ static esp_err_t portal_save(httpd_req_t *req) {
     form_field(body, "bdiv", tmp, sizeof(tmp));
     int bd = atoi(tmp);
     if (bd >= 100 && bd <= 1000) cfg.bat_div_x100 = (uint16_t)bd;
+    form_field(body, "wmin", tmp, sizeof(tmp));
+    int wm = atoi(tmp);
+    if (wm >= 5 && wm <= 240) cfg.wx_min = (uint8_t)wm;
 
     /* 供运行时使用的 "当前网络" */
     strlcpy(cfg.wifi_ssid, cfg.last_ssid[0] ? cfg.last_ssid : cfg.net_ssid[0], sizeof(cfg.wifi_ssid));

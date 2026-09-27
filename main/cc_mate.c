@@ -173,10 +173,18 @@ static void net_task(void *arg) {
 
     while (1) {
         int period = s_cfg.poll_min >= 1 ? s_cfg.poll_min : 5;
+        int wx_period = s_cfg.wx_min >= 5 ? s_cfg.wx_min : 30;
 
         ESP_LOGI(TAG, "poll round");
         net_query_poll(&s_state, &s_cfg);
-        weather_query(&s_state, &s_cfg);
+
+        /* 天气与轮询解耦: 默认 30 分钟才查一次 (省配额/省射频时间) */
+        static uint32_t s_last_wx = 0;
+        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        if (s_last_wx == 0 || (now_ms - s_last_wx) >= (uint32_t)wx_period * 60000) {
+            weather_query(&s_state, &s_cfg);
+            s_last_wx = now_ms;
+        }
 
         /* 时间未同步 (SNTP 未完成): 再等最多 10s 并补查一次, 保证消费历史有日期 */
         if (!s_state.time_valid) {
