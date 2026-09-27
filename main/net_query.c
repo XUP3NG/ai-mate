@@ -237,7 +237,10 @@ static void query_dsk(app_state_t *st, const app_config_t *cfg) {
     cJSON_Delete(root);
 
     /* ── 消费历史推算 ── */
-    if (!st->dsk.valid || !st->time_valid) return;
+    if (!st->dsk.valid || !st->time_valid) {
+        net_hist_sync(st);      /* 网络/时间未就绪: 仍把 NVS 历史显示出来 */
+        return;
+    }
 
     time_t now = time(NULL);
     struct tm tm_now;
@@ -315,25 +318,64 @@ static void query_dsk(app_state_t *st, const app_config_t *cfg) {
         }
     }
 
-    /* 回填 UI 状态 */
+    /* 回填 UI 状态 (统一走 net_hist_sync, 含今日/本月与自检日志) */
+    net_hist_sync(st);
+}
+
+/* ── 历史 → UI 状态 ──
+ * 不依赖联网/时间: 柱状图开机即可显示 NVS 里的历史。
+ * time_valid 时同时算今日/本月; 否则等 SNTP 同步后再算。
+ */
+void net_hist_sync(app_state_t *st) {
+    int32_t cents[HIST_DAYS];
+    int32_t base_date = 0;
+    for (int i = 0; i < HIST_DAYS; i++) cents[i] = -1;
+    {
+        nvs_handle_t h;
+        if (nvs_open(HIST_NS, NVS_READONLY, &h) == ESP_OK) {
+            size_t sz = HIST_DAYS * 4;
+            nvs_get_blob(h, "cents", cents, &sz);
+            nvs_get_i32(h, "base", &base_date);
+            nvs_close(h);
+        }
+    }
+
     hist_info_t *hi = &st->hist;
     memcpy(hi->cents, cents, sizeof(cents));
     hi->year = base_date / 10000;
     hi->month = (base_date / 100) % 100;
     hi->day = base_date % 100;
     hi->count = HIST_DAYS;
-    hi->today_cents = cents[HIST_DAYS - 1];
 
-    /* 本月消费: 日期落在当前月份的天求和 (cents 末位=今天, 向前推日期) */
-    int32_t month_c = 0;
-    int bn_today = day_no(today_key);
-    for (int i = 0; i < HIST_DAYS; i++) {
-        if (cents[i] <= 0) continue;
-        int32_t key = key_no(bn_today - (HIST_DAYS - 1 - i));
-        if ((key / 100) % 100 == (int32_t)tm_now.tm_mon + 1 && key / 10000 == tm_now.tm_year + 1900)
-            month_c += cents[i];
+    /* 今日/本月需要正确日期: SNTP 未同步时不能瞎猜 (末格可能是几天前的数据) */
+    if (st->time_valid) {
+        hi->today_cents = cents[HIST_DAYS - 1] > 0 ? cents[HIST_DAYS - 1] : 0;
+        time_t now = time(NULL);
+        struct tm tm_now;
+        localtime_r(&now, &tm_now);
+        int32_t month_c = 0;
+        int bn_today = day_no(date_key(&tm_now));
+        for (int i = 0; i < HIST_DAYS; i++) {
+            if (cents[i] <= 0) continue;
+            int32_t key = key_no(bn_today - (HIST_DAYS - 1 - i));
+            if ((key / 100) % 100 == (int32_t)tm_now.tm_mon + 1 &&
+                key / 10000 == tm_now.tm_year + 1900)
+                month_c += cents[i];
+        }
+        hi->month_cents = month_c;
+    } else {
+        hi->today_cents = 0;      /* 未知: UI 显示 "--" */
+        hi->month_cents = 0;
     }
-    hi->month_cents = month_c;
+
+    /* 自检: 直接反映 NVS 里到底有没有历史 */
+    int days = 0;
+    int32_t sum = 0;
+    for (int i = 0; i < HIST_DAYS; i++)
+        if (cents[i] > 0) { days++; sum += cents[i]; }
+    ESP_LOGI(TAG, "HIST NVS: %d 天有数据, 合计 %.2f 元, base=%d, 今日 %.2f, 本月 %.2f",
+             days, sum / 100.0, base_date,
+             hi->today_cents / 100.0, hi->month_cents / 100.0);
 }
 
 /* ── 一轮完整查询 ── */

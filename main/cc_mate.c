@@ -206,6 +206,7 @@ void app_main(void)
 
     s_state.net = NET_CONNECTING;
     net_query_init_time();
+    net_hist_sync(&s_state);         /* 先把 NVS 历史读出来, 柱状图开机即有数据 */
     wifi_mgr_connect_best(&s_cfg);   /* 扫描并连接信号最好的已保存网络 */
 
     xTaskCreatePinnedToCore(net_task, "net", 12288, NULL, 5, NULL, 1);

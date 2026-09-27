@@ -459,7 +459,10 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
         char tb[16], mb[16];
         fmt_cents(tb, sizeof(tb), s->hist.today_cents);
         fmt_cents(mb, sizeof(mb), s->hist.month_cents);
-        snprintf(b, sizeof(b), "今日消费 %s 元    本月消费 %s 元", tb, mb);
+        if (s->time_valid)
+            snprintf(b, sizeof(b), "今日消费 %s 元    本月消费 %s 元", tb, mb);
+        else
+            snprintf(b, sizeof(b), "今日消费 --    本月消费 --   (对时中)");
         lv_label_set_text(ui->dsk_spend, b);
 
         lv_label_set_text(ui->dsk_err, "");
@@ -546,7 +549,10 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
         fmt_cents(tb, sizeof(tb), s->hist.today_cents);
         fmt_cents(mb, sizeof(mb), s->hist.month_cents);
         fmt_cents(sb, sizeof(sb), sum30);
-        snprintf(b, sizeof(b), "今日 %s 元    本月 %s 元    30天 %s 元", tb, mb, sb);
+        if (s->time_valid)
+            snprintf(b, sizeof(b), "今日 %s 元    本月 %s 元    30天 %s 元", tb, mb, sb);
+        else
+            snprintf(b, sizeof(b), "今日 --    本月 --    30天 %s 元   (对时中)", sb);
         lv_label_set_text(ui->chart_info, b);
 
         if (valid_days > 0) {
