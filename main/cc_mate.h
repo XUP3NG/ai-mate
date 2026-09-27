@@ -130,11 +130,11 @@ typedef struct {
     char     err[48];
 } weather_info_t;
 
-/* ── AI 每日像素画 (DeepSeek 生成) ── */
+/* ── 每日一图 (Bing 壁纸) ── */
 typedef struct {
-    bool     valid;             /* 有可显示的画 (NVS 里的也算) */
+    bool     valid;             /* 有可显示的图 (NVS 里的也算) */
     bool     generating;        /* 正在生成 (UI 显示提示) */
-    char     title[24];         /* 画的标题 */
+    char     title[64];         /* 图片说明 (Bing copyright, 去掉版权括号) */
 } art_info_t;
 
 /* ── 全局应用状态 ── */

@@ -880,7 +880,7 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
                      s_art_rev, dst[124 * ART_W + 200], dst[0]);
         }
         if (s->art.valid)
-            snprintf(b, sizeof(b), "%s · Bing 每日壁纸", s->art.title);
+            snprintf(b, sizeof(b), "%s", s->art.title);
         else
             snprintf(b, sizeof(b), "%s", s->art.generating ? "正在获取今日壁纸…" : "等待网络获取今日壁纸");
         lv_label_set_text(ui->art_title, b);

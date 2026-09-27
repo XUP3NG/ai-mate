@@ -28,7 +28,7 @@ static const char *TAG = "art";
 #define JPG_CAP        (192 * 1024)                /* 原始/解压后的 JPEG (实测 20KB) */
 #define RGB_CAP        (ART_W_PX * ART_H_PX * 2)   /* RGB565: 198400 */
 #define LUM_CAP        (ART_W_PX * ART_H_PX * 2)   /* int16 亮度: 198400 */
-#define ART_PROMPT_VER 6                           /* 渲染算法版本: 变了重取一次 */
+#define ART_PROMPT_VER 7                           /* 渲染/存储格式版本: 变了重取一次 */
 #define MAX_TRIES_PER_DAY 3
 
 #define BING_JSON_URL  "https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN"
@@ -38,13 +38,13 @@ typedef struct __attribute__((packed)) {
     uint32_t magic;                    /* 'AIMG' */
     int32_t  day;                      /* UTC 日 */
     int32_t  ver;                      /* 渲染算法版本 */
-    char     title[40];
+    char     title[96];                /* 图片说明 (Bing copyright, 超长由 UI 截断) */
     uint32_t crc;                      /* 位图校验 (字节和) */
 } art_hdr_t;
 #define ART_MAGIC 0x474D4941u          /* "AIMG" (小端) */
 
 static uint8_t  s_bits[ABYTES];
-static char     s_title[40];
+static char     s_title[96];
 static int32_t  s_day = -1, s_try_day = -1, s_try_ver = -1, s_ver = 0;
 static uint8_t  s_tries = 0;
 static int      s_rev = 1;
@@ -208,10 +208,18 @@ static bool art_fetch(app_state_t *st) {
     cJSON *imgs = cJSON_GetObjectItem(root, "images");
     cJSON *im0  = cJSON_IsArray(imgs) ? cJSON_GetArrayItem(imgs, 0) : NULL;
     cJSON *jub  = im0 ? cJSON_GetObjectItem(im0, "urlbase") : NULL;
+    cJSON *jcp  = im0 ? cJSON_GetObjectItem(im0, "copyright") : NULL;   /* 图片说明 */
     cJSON *jti  = im0 ? cJSON_GetObjectItem(im0, "title") : NULL;
-    char urlbase[192] = "", title[40] = "";
+    char urlbase[192] = "", title[96] = "";
     if (jub && jub->valuestring) strlcpy(urlbase, jub->valuestring, sizeof(urlbase));
-    if (jti && jti->valuestring) strlcpy(title, jti->valuestring, sizeof(title));
+    /* 优先用说明文字 (如 "海笔上的装饰蟹，科莫多国家公园，印度尼西亚 (© xx)"),
+     * 去掉结尾的版权括号; 没有就退回短标题 */
+    if (jcp && jcp->valuestring) {
+        char *cut = strstr(jcp->valuestring, " (");
+        if (cut) strlcpy(title, jcp->valuestring, (size_t)(cut - jcp->valuestring) + 1);
+        else     strlcpy(title, jcp->valuestring, sizeof(title));
+    }
+    if (!title[0] && jti && jti->valuestring) strlcpy(title, jti->valuestring, sizeof(title));
     cJSON_Delete(root);
     if (!urlbase[0]) { ESP_LOGW(TAG, "bing json 里没有 urlbase"); return false; }
     if (!title[0]) strlcpy(title, "每日一图", sizeof(title));
