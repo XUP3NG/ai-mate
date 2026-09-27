@@ -7,6 +7,7 @@
 #include "esp_sntp.h"
 #include "nvs.h"
 #include "cJSON.h"
+#include "puff.h"
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
@@ -79,6 +80,58 @@ int net_https_get_ex(const char *url, const char *hdr_auth, const char *hdr_org,
 int net_https_get(const char *url, const char *hdr_auth, const char *hdr_org,
                   const char *hdr_proj, char *buf, size_t bufsz) {
     return net_https_get_ex(url, hdr_auth, hdr_org, hdr_proj, NULL, buf, bufsz);
+}
+
+/* ── 响应体解码: gzip → 明文 ──
+ * 部分服务端 (如和风天气) 无视 Accept-Encoding: identity 直接回 gzip。
+ * ESP-IDF 无 zlib/miniz 组件, 故内置 puff (DEFLATE 解压) 自行处理 gzip 容器。
+ */
+int net_http_body_decode(const char *in, int in_len, char *out, size_t outsz) {
+    if (in_len <= 0 || !out || outsz < 2) return -1;
+
+    const uint8_t *p = (const uint8_t *)in;
+    bool gz = (in_len > 18) && (p[0] == 0x1F) && (p[1] == 0x8B);
+    if (!gz) {
+        size_t n = (size_t)in_len < outsz - 1 ? (size_t)in_len : outsz - 1;
+        memcpy(out, in, n);
+        out[n] = '\0';
+        return (int)n;
+    }
+
+    if (p[2] != 8) {                       /* CM != deflate */
+        ESP_LOGW(TAG, "gzip CM=%u unsupported", p[2]);
+        return -1;
+    }
+
+    /* 解析 gzip 头 (RFC1952) */
+    uint8_t flg = p[3];
+    int off = 10;
+    if (flg & 0x04) {                      /* FEXTRA */
+        if (off + 2 > in_len) return -1;
+        int xlen = p[off] | (p[off + 1] << 8);
+        off += 2 + xlen;
+    }
+    if (flg & 0x08) {                      /* FNAME (NUL 结尾) */
+        while (off < in_len && p[off]) off++;
+        off++;
+    }
+    if (flg & 0x10) {                      /* FCOMMENT */
+        while (off < in_len && p[off]) off++;
+        off++;
+    }
+    if (flg & 0x02) off += 2;              /* FHCRC */
+    if (off + 8 >= in_len) return -1;      /* 需留 deflate + CRC32/ISIZE 尾部 */
+
+    unsigned long dlen = (unsigned long)(outsz - 1);
+    unsigned long slen = (unsigned long)(in_len - off - 8);   /* 排除尾部 8 字节 */
+    int ret = puff((unsigned char *)out, &dlen, p + off, &slen);
+    if (ret != 0) {
+        ESP_LOGW(TAG, "puff failed: %d (in=%d, hdr=%d)", ret, in_len, off);
+        return -1;
+    }
+    out[dlen] = '\0';
+    ESP_LOGI(TAG, "gunzip: %d -> %lu bytes", in_len, dlen);
+    return (int)dlen;
 }
 
 /* ── 智谱 GLM Coding Plan ── */

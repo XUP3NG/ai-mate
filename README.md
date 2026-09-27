@@ -132,6 +132,8 @@ ESP32-S3 + 4.2" 反射式墨水屏（400×300 纯黑白），**WiFi 直连**查�
 天气刷新与轮询**解耦**：默认 30 分钟一次（配网页可调 5–240 分钟）。按默认设置约 **1,440 次/月**，仅占和风免费额度的 3%。
 
 > 数据来源标注：使用和风天气时，天气页页脚显示「数据源 和风天气」（这是和风[服务条款](https://dev.qweather.com/docs/terms/attribution/)的要求）。
+>
+> ⚠️ 和风天气会**无视 `Accept-Encoding: identity` 直接返回 gzip**（其所有文档示例都带 `--compressed`）。ESP-IDF 没有 zlib 组件，因此本项目内置了 `components/puff`（公共领域的 DEFLATE 解压实现）自动识别 `1F 8B` 魔数并解压，无需额外配置。
 
 **定位**：
 
@@ -226,14 +228,18 @@ main/
 ├── cc_mate.c/h          # 入口、主循环、页面轮播、电池 ADC、BOOT 键
 ├── config_store.c/h     # NVS 配置读写
 ├── wifi_mgr.c/h         # WiFi STA + AP 配网门户 + 射频开关（省电）
-├── net_query.c/h        # GLM/DeepSeek 查询、SNTP、消费历史推算、通用 HTTPS GET
-├── weather.c/h          # Open-Meteo 查询、IP/城市定位、WMO 码→中文/图标
+├── net_query.c/h        # GLM/DeepSeek 查询、SNTP、消费历史推算、通用 HTTPS GET、gzip 解压
+├── weather.c/h          # 双数据源天气（和风/Open-Meteo）、IP/城市定位、图标映射
 └── ui/
     ├── ui.c/h           # 四页 UI（额度/柱状图/配网/天气）
     ├── font_cjk_16.c    # 中文 + ASCII + 标点（含天气符号）
     ├── font_wx_icon_36.c / _24.c   # 天气图标（当前 / 预报）
     └── font_wx_num_36.c            # 大号温度数字
-components/rlcd_display/  # ST7305 驱动 + LVGL 桥接
+components/
+├── rlcd_display/         # ST7305 驱动 + LVGL 桥接
+└── puff/                 # DEFLATE 解压（zlib 作者 Mark Adler, 公共领域）
+                          # ESP-IDF 无 zlib 组件；和风天气无视 identity 直接回 gzip，
+                          # 故内置 puff 自行解析 gzip 容器后解压
 ```
 
 ### NVS 键

@@ -28,7 +28,8 @@ static const char *TAG = "wx";
 #define WX_NS     "ai_hist"      /* 坐标缓存放历史命名空间 */
 #define WX_BUF    16384          /* 和风 daily 响应较冗长 (含天文数据), 缓冲区要大 */
 
-static char s_buf[WX_BUF];       /* 静态缓冲, 别放栈上 */
+static char s_buf[WX_BUF];       /* 接收缓冲 (可能是 gzip) */
+static char s_dec[WX_BUF];       /* 解码后的 JSON (zlib 解压输出) */
 
 /* ── WMO 天气码 (Open-Meteo) ── */
 
@@ -249,8 +250,14 @@ static bool fetch_openmeteo(weather_info_t *wx, int32_t lat, int32_t lon) {
         strlcpy(wx->err, "网络/HTTP 失败", sizeof(wx->err));
         return false;
     }
-    cJSON *root = cJSON_Parse(s_buf);
+    int dl = net_http_body_decode(s_buf, n, s_dec, sizeof(s_dec));
+    if (dl < 0) {
+        strlcpy(wx->err, "响应解压失败", sizeof(wx->err));
+        return false;
+    }
+    cJSON *root = cJSON_Parse(s_dec);
     if (!root) {
+        ESP_LOGW(TAG, "om: JSON 解析失败, body[%d]: %.200s", dl, s_dec);
         strlcpy(wx->err, "JSON 解析失败", sizeof(wx->err));
         return false;
     }
@@ -313,8 +320,14 @@ static bool fetch_qweather(weather_info_t *wx, const app_config_t *cfg, int32_t 
         strlcpy(wx->err, "和风: 网络/认证失败", sizeof(wx->err));
         return false;
     }
-    cJSON *root = cJSON_Parse(s_buf);
+    int dl = net_http_body_decode(s_buf, n, s_dec, sizeof(s_dec));
+    if (dl < 0) {
+        strlcpy(wx->err, "和风: 响应解压失败", sizeof(wx->err));
+        return false;
+    }
+    cJSON *root = cJSON_Parse(s_dec);
     if (!root) {
+        ESP_LOGW(TAG, "qw current: JSON 解析失败, body[%d]: %.200s", dl, s_dec);
         strlcpy(wx->err, "和风: JSON 解析失败", sizeof(wx->err));
         return false;
     }
@@ -346,8 +359,16 @@ static bool fetch_qweather(weather_info_t *wx, const app_config_t *cfg, int32_t 
         strlcpy(wx->err, "和风: 预报请求失败", sizeof(wx->err));
         return false;
     }
-    root = cJSON_Parse(s_buf);
+    int dl2 = net_http_body_decode(s_buf, n, s_dec, sizeof(s_dec));
+    if (dl2 < 0) {
+        strlcpy(wx->src, "和风天气", sizeof(wx->src));
+        if (ok) return true;
+        strlcpy(wx->err, "和风: 预报解压失败", sizeof(wx->err));
+        return false;
+    }
+    root = cJSON_Parse(s_dec);
     if (!root) {
+        ESP_LOGW(TAG, "qw daily: JSON 解析失败, body[%d]: %.200s", dl2, s_dec);
         strlcpy(wx->src, "和风天气", sizeof(wx->src));
         if (ok) return true;
         strlcpy(wx->err, "和风: 预报解析失败", sizeof(wx->err));
@@ -443,5 +464,7 @@ void weather_query(app_state_t *st, const app_config_t *cfg) {
         ESP_LOGI(TAG, "[%s] %s: %s %.1f°C 湿%d%% | 明日 %s %.0f/%.0f°C",
                  st->wx.src, st->wx.city, st->wx.text, st->wx.temp_x10 / 10.0, st->wx.humidity,
                  st->wx.dtext[1], st->wx.tmax_x10[1] / 10.0, st->wx.tmin_x10[1] / 10.0);
+    } else {
+        ESP_LOGW(TAG, "weather failed: %s", st->wx.err);
     }
 }

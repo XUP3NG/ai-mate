@@ -85,7 +85,7 @@ typedef struct {
 typedef struct {
     bool     valid;
     char     city[24];               /* 城市名 (显示用) */
-    char     src[12];                /* 数据来源: Open-Meteo / 和风天气 */
+    char     src[16];               /* 数据来源: Open-Meteo / 和风天气 (4 汉字=12B+NUL) */
     int16_t  temp_x10;              /* 当前温度 (0.1°C) */
     uint8_t  humidity;              /* 当前湿度 % */
     char     text[20];              /* 当前天气文字 (中文) */

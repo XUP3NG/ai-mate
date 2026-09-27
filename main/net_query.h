@@ -32,6 +32,10 @@ int net_https_get_ex(const char *url, const char *hdr_auth, const char *hdr_org,
                      const char *hdr_proj, const char *hdr_xkey,
                      char *buf, size_t bufsz);
 
+/* 响应体解码: 检测 gzip 魔数并解压 (部分服务端无视 Accept-Encoding: identity)
+ * 返回写入 out 的长度 (不含结尾 \0), <0 失败 */
+int net_http_body_decode(const char *in, int in_len, char *out, size_t outsz);
+
 #ifdef __cplusplus
 }
 #endif
