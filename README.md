@@ -13,10 +13,11 @@ ESP32-S3 + 4.2" 反射式墨水屏（400×300 纯黑白），**WiFi 直连**查�
 - **智谱 GLM Coding Plan**：5 小时滚动窗 + 周窗的已用百分比、剩余积分、重置倒计时
 - **DeepSeek**：总余额 / 赠金余额 / 充值余额，以及今日、本月消费
 - **消费统计**：余额快照推算每日消费，30 天柱状图 + 日均/最高
-- **天气**：当前天气 + 4 日预报（Open-Meteo，免 API Key），支持 **IP 自动定位**
-- **室内温湿度**：读板载 SHTC3，室内温度显示在室外温度同一行的右端（对比一目了然）
+- **天气**：当前天气 + 4 日预报（和风/Open-Meteo 双源），含**体感温度、风力、空气质量**，
+  支持自动定位或手动钉死坐标；天气图标用和风官方 **QWeather Icons** 字体
+- **室内温湿度**：读板载 SHTC3，室内温度与室外温度同行对比
 - **每日一图**：每天自动拉取 **Bing 当日壁纸**，设备端 JPEG 解码 + 自动色阶抖动，
-  以 400×248 全屏 1-bit 显示（带标题）。零成本、无需 API Key，每天 20KB 流量
+  以 400×248 全屏 1-bit 显示（带图片说明）。零成本、无需 API Key，每天 20KB 流量
 - **免电脑配网**：手机连热点填表即可，配置存 NVS；换 WiFi/换 Key 长按 BOOT 重配
 - **省电**：80MHz + tickless idle + WiFi 查询后断射频（duty-cycle），平均电流约 15–25mA
 - **1-bit 屏优化**：描边进度条、虚线网格、专用图标字体
@@ -41,7 +42,7 @@ ESP32-S3 + 4.2" 反射式墨水屏（400×300 纯黑白），**WiFi 直连**查�
 
 ---
 
-## 三个页面（每 15 秒轮播）
+## 四个页面（每 15 秒轮播：额度 / 柱状图 / 天气 / 每日一图）
 
 ### 第 1 页 · 额度总览
 
@@ -81,35 +82,25 @@ ESP32-S3 + 4.2" 反射式墨水屏（400×300 纯黑白），**WiFi 直连**查�
 ```
 ┌──────────────────────────────────────────────────┐
 │ 无锡市              和风天气 · 更新 2 分钟前        │
-│    ☁          23.1 度                             │
-│   (36px)      阴                    湿度 97%      │
+│  (雨)      24.5 度  湿度 92%      室内 25.3度 60%  │
+│ 阵雨  体感 27.0度  (风)3级  (空)优 17               │
 │ ──────────────────────────────────────────────── │
 │ ▌! 大风蓝色预警  (+1 条)▐   ← 反白横幅              │
-│ ☔ 间歇性降雨还将持续50分钟       峰值 0.20mm/5m   │
+│ 间歇性降雨还将持续50分钟         峰值 0.20mm/5m    │
 │    今天       明天       周三       周四           │
-│     ☁         ☂         ☀         ☀             │
+│   (雨)      (雨)      (晴)      (晴)              │
 │   30/22     28/20     31/21     32/22            │
 │    ▂▄█▆▃▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁  ← 未来2小时降水      │
 │  现在          +1小时          +2小时             │
 └──────────────────────────────────────────────────┘
 ```
 
-**无预警时**（当前常态，内容整体上移 26px，柱状图更高）：
+**无预警时**（当前常态，内容整体上移 26px，柱状图更高）：布局同上，去掉预警横幅。
 
-```
-┌──────────────────────────────────────────────────┐
-│ 无锡市              和风天气 · 更新 2 分钟前        │
-│    ☁          23.5 度                             │
-│   (36px)      阴                    湿度 95%      │
-│ ──────────────────────────────────────────────── │
-│ ☔ 间歇性降雨还将持续60分钟       峰值 0.45mm/5m   │
-│    今天       明天       周三       周四           │
-│     ☁         ☂         ☀         ☀             │
-│   30/22     28/20     31/21     32/22            │
-│         ▃▅█▇▅▃▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁               │
-│  现在          +1小时          +2小时             │
-└──────────────────────────────────────────────────┘
-```
+说明：
+- 第一行：天气图标（和风官方图标字体）+ 大号温度 + 湿度，右端是**室内温度+湿度**（板载 SHTC3）
+- 第二行四格：天气描述 | **体感温度** | **风力（风图标 + 蒲福风级）** | **空气质量（图标 + 类别/数值）**
+- 4 日预报的图标同样来自和风图标字体，按天气代码精确匹配
 
 **天气预警**（和风 `weatheralert`）：显示当前生效预警，多条时选最严重的一条并标注 `(+N 条)`。
 橙色及以上预警前缀 `!` 强调。1-bit 屏无法用颜色，故用**黑底白字反白横幅**表达严重性。
@@ -119,7 +110,14 @@ ESP32-S3 + 4.2" 反射式墨水屏（400×300 纯黑白），**WiFi 直连**查�
 并直接使用和风的自然语言摘要（如「间歇性降雨还将持续50分钟」）+ 峰值强度（mm/5min）。
 无和风 Key 时，退化为逐小时预报推算的「N小时后有雨 (概率%)」文本，柱状图隐藏。
 
-> 布局按**导出字体的真实度量**排布（`font_cjk_16` 行高 18、`font_wx_icon_36` 36、
+### 第 4 页 · 每日一图
+
+每天自动更换为 **Bing 当日壁纸**：设备端下载（服务端直接裁成 400×248，仅 ~20KB）→
+JPEG 解码 → 自动色阶 + 平坦区保护抖动 → 400×248 全屏 1-bit，底部一行显示图片说明
+（自动去掉 Bing 结尾的摄影者版权括号）。图存入 `storage` 裸分区，断电不丢；
+失败自动重试 3 次/天。零成本、无需 API Key。
+
+> 布局按**导出字体的真实度量**排布（`font_cjk_16` 行高 18、`font_qw_36` 37、
 > `font_wx_num_36` 28、Montserrat 20 行高 22），所有动态文本标签均设 `LV_LABEL_LONG_DOT`，
 > 超长显示省略号而不是换行压住下一行。
 
@@ -138,7 +136,8 @@ ESP32-S3 + 4.2" 反射式墨水屏（400×300 纯黑白），**WiFi 直连**查�
 | 智谱额度 | `GET https://bigmodel.cn/api/monitor/usage/quota/limit?type=1`，Header: `Authorization`(raw key) + `bigmodel-organization` + `bigmodel-project` |
 | DeepSeek 余额 | `GET https://api.deepseek.com/user/balance`，Header: `Authorization: Bearer <key>` |
 | 天气（默认） | `GET https://api.open-meteo.com/v1/forecast`（免 Key，含 current/daily/hourly） |
-| 天气（可选） | `GET https://<你的API Host>/weather/v1/{current,daily,hourly}/{lat}/{lon}`、`/weatheralert/v1/current/{lat}/{lon}`、`/v7/minutely/5m?location=lon,lat`，Header: `X-QW-Api-Key`（和风天气） |
+| 天气（可选） | `GET https://<你的API Host>/weather/v1/{current,daily,hourly}/{lat}/{lon}`、`/weatheralert/v1/current/{lat}/{lon}`、`/v7/minutely/5m?location=lon,lat`、`/airquality/v1/current/{lat}/{lon}`，Header: `X-QW-Api-Key`（和风天气） |
+| 每日一图 | `GET https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN` + Bing 图片 URL（免 Key） |
 | 城市定位 | `GET https://geocoding-api.open-meteo.com/v1/search`（免 Key） |
 | IP 定位 | `http://ip-api.com/json/`（主）/ `https://api.ip.sb/geoip`（备），免 Key |
 | 时间 | SNTP `ntp.aliyun.com` / `pool.ntp.org` |
@@ -170,7 +169,9 @@ ESP32-S3 + 4.2" 反射式墨水屏（400×300 纯黑白），**WiFi 直连**查�
 | Open-Meteo（默认） | 不需要 | 全球覆盖，国内精度一般 | 免费无配额 |
 | [和风天气](https://dev.qweather.com) | 需 API Host + API Key | 国内 1 公里分辨率、分钟级更新、中文天气现象 | 每自然月**前 5 万次免费**，之后 ¥0.0007/次 |
 
-天气刷新与轮询**解耦**：默认 30 分钟一次（配网页可调 5–240 分钟）。和风路径每次查询 5 个接口（实时/每日/逐小时/预警/分钟级降水），按默认设置约 **7,200 次/月**，占和风免费额度的 14.4%；Open-Meteo 路径只需 1 次请求且免 Key。
+天气刷新与轮询**解耦**：默认 30 分钟一次（配网页可调 5–240 分钟）。和风路径每次查询 6 个接口
+（实时/每日/逐小时/预警/分钟级降水/空气质量），按默认设置约 **8,600 次/月**，占和风免费额度的 ~17%；
+Open-Meteo 路径只需 1 次请求且免 Key（无空气质量/分钟级降水，体感用 `apparent_temperature`）。
 
 > 数据来源标注：使用和风天气时，天气页页脚显示「数据源 和风天气」（这是和风[服务条款](https://dev.qweather.com/docs/terms/attribution/)的要求）。
 >
@@ -284,18 +285,20 @@ main/
 ├── cc_mate.c/h          # 入口、主循环、页面轮播、电池 ADC、BOOT 键
 ├── config_store.c/h     # NVS 配置读写
 ├── wifi_mgr.c/h         # WiFi STA + AP 配网门户 + 射频开关（省电）
-├── net_query.c/h        # GLM/DeepSeek 查询、SNTP、消费历史推算、通用 HTTPS GET、gzip 解压
-├── weather.c/h          # 双数据源天气（和风/Open-Meteo）、IP/城市定位、图标映射
+├── net_query.c/h        # GLM/DeepSeek 查询、SNTP、消费历史、HTTPS GET/POST、gzip 解压
+├── weather.c/h          # 双数据源天气（和风/Open-Meteo）、空气质量、体感、风力、图标映射
+├── shtc3.c/h            # 板载 SHTC3 室内温湿度（I2C）
+├── art.c/h              # 每日一图：Bing 壁纸 → JPEG 解码 → 抖动 → 1-bit
 └── ui/
-    ├── ui.c/h           # 四页 UI（额度/柱状图/配网/天气）
-    ├── font_cjk_16.c    # 中文 + ASCII + 标点（含天气符号）
-    ├── font_wx_icon_36.c / _24.c   # 天气图标（当前 / 预报）
-    └── font_wx_num_36.c            # 大号温度数字
+    ├── ui.c/h           # 五页 UI（额度/柱状图/配网/天气/每日一图）
+    ├── font_cjk_16.c    # 中文 + ASCII + 标点
+    ├── font_qw_36/24/16.c   # QWeather Icons 天气图标（当前/预报/行内）
+    ├── font_wx_num_36.c # 大号温度数字
+    └── icons/           # QWeather Icons 字体源（ttf/json/LICENSE）
 components/
-├── rlcd_display/         # ST7305 驱动 + LVGL 桥接
-└── puff/                 # DEFLATE 解压（zlib 作者 Mark Adler, 公共领域）
-                          # ESP-IDF 无 zlib 组件；和风天气无视 identity 直接回 gzip，
-                          # 故内置 puff 自行解析 gzip 容器后解压
+├── rlcd_display/        # ST7305 驱动 + LVGL 桥接
+├── puff/                # DEFLATE 解压（和风 gzip）
+└── esp_new_jpeg/        # 软件 JPEG 解码（预编译库；收编为本地组件以避开中文路径，见 CLAUDE.md 踩坑 #11）
 ```
 
 ### NVS 键
@@ -303,28 +306,35 @@ components/
 | 命名空间 | 键 |
 |---|---|
 | `ai_mate` | `gkey` `gorg` `gproj` `dkey` `gtype` `pmin` · 天气: `wcity` `qwhost` `qwkey` `wmin` · 电池: `bdiv` · WiFi: `nnet` `s0..s3` `p0..p3` `last`（+ 兼容旧字段 `ssid` `pass`） |
-| `ai_hist` | `cents`(63 天消费) `base` `dbase` `rechg` `lbal` `lepo` `wxlat` `wxlon` `wxcity2` `wxepo` |
+| `ai_hist` | `cents`(63 天消费) `base` `dbase` `rechg` `lbal` `lepo` |
+| `ai_art` | 每日一图计数: `day` `ver` `tryd` `tryv` `try`（位图本体存 `storage` 分区） |
+
+`storage` 分区（1MB，原留给 SPIFFS，本项目当裸分区用）：每日一图的位图 + 头（magic/day/ver/标题/crc）。
 
 ---
 
 ## 字体生成
 
-字体用 [lv_font_conv](https://github.com/lvgl/lv_font_conv) 从 Windows 系统字体裁剪：
+字体用 [lv_font_conv](https://github.com/lvgl/lv_font_conv) 从 Windows 系统字体裁剪
+（在 `main/ui` 目录下执行）：
 
 ```bash
-# 中文字体：simhei 提供 CJK/ASCII，SEGOE UI SYMBOL 补天气符号（simhei 缺 ☀☁☂ 等字形）
+# 中文字体：simhei 提供 CJK/ASCII，SEGOE UI SYMBOL 补标点字形
 npx lv_font_conv --font C:/Windows/Fonts/simhei.ttf \
   --range 0x0020-0x007F,0x2000-0x206F,0x2580-0x259F,0x2600-0x27BF,0x3000-0x303F,0x4E00-0x9FFF,0xFF00-0xFF5F \
   --font C:/Windows/Fonts/seguisym.ttf --symbols "☀☁☂☰☔❄⚡·" \
   --size 16 --bpp 1 --format lvgl --no-compress -o font_cjk_16.c
 
-# 天气图标（大/小）与大号数字
-npx lv_font_conv --font C:/Windows/Fonts/seguisym.ttf --symbols "☀☁☂☔☰❄⚡" \
-  --size 36 --bpp 1 --format lvgl --no-compress -o font_wx_icon_36.c
-npx lv_font_conv --font C:/Windows/Fonts/seguisym.ttf --symbols "☀☁☂☔☰❄⚡" \
-  --size 24 --bpp 1 --format lvgl --no-compress -o font_wx_icon_24.c
+# 大号温度数字
 npx lv_font_conv --font C:/Windows/Fonts/simhei.ttf --symbols "0123456789./-" \
   --size 36 --bpp 1 --format lvgl --no-compress -o font_wx_num_36.c
+
+# 天气图标：QWeather Icons 官方字体（源文件在 ui/icons/，MIT）
+# 码点 = 和风天气代码（sunny=100 …），映射表见 weather.c 的 QW_ICON_MAP[]
+npx lv_font_conv --font icons/qweather-icons.ttf \
+  --range 0xF101-0xF146,0xF21A,0xF2E6 \
+  --size 36 --bpp 1 --format lvgl --no-compress -o font_qw_36.c
+# 同理生成 font_qw_24.c（预报）、font_qw_16.c（行内空气质量/风力图标）
 ```
 
 两个注意点：
@@ -360,7 +370,10 @@ npx lv_font_conv --font C:/Windows/Fonts/simhei.ttf --symbols "0123456789./-" \
 - 原始硬件与驱动：[cc_mate](https://github.com/vincezhaojie-lang/cc_mate)
 - 每日消费推算思路：[quote0-deepseek-balance](https://github.com/SamLinBIT/quote0-deepseek-balance)
 - 智谱额度接口与 org/project 用法：[pi-glm-quota](https://github.com/focksor/pi-glm-quota)
-- 天气数据：[Open-Meteo](https://open-meteo.com/)
+- 天气数据：[Open-Meteo](https://open-meteo.com/)、[和风天气](https://dev.qweather.com/)
+- 天气图标：[QWeather Icons](https://icons.qweather.com/)（MIT）
+- 每日一图：[Bing 每日壁纸](https://www.bing.com/)（版权归各自图片来源方）
+- JPEG 解码：[esp_new_jpeg](https://components.espressif.com/components/espressif/esp_new_jpeg)（Espressif）
 
 ## License
 
