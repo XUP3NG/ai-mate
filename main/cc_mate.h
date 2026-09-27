@@ -144,6 +144,11 @@ typedef struct {
     uint8_t  battery_pct;
     uint16_t battery_mv;         /* 电池电压 mV (开路电压, 射频关闭时采样) */
     bool     battery_charging;
+
+    /* 板载 SHTC3 室内温湿度 (传感器不在位时 indoor_valid 恒为 false) */
+    bool     indoor_valid;
+    int16_t  indoor_temp_x10;    /* 室内温度 0.1°C */
+    uint8_t  indoor_rh;          /* 室内湿度 % */
 } app_state_t;
 
 #ifdef __cplusplus

@@ -15,6 +15,7 @@
 #include "wifi_mgr.h"
 #include "net_query.h"
 #include "weather.h"
+#include "shtc3.h"
 #include "ui/ui.h"
 #include "rlcd_display.h"
 #include "esp_lvgl_port.h"
@@ -241,6 +242,16 @@ static void bat_update(void) {
              s_state.battery_charging ? " charging" : "");
 }
 
+/* 读板载 SHTC3 室内温湿度 (传感器不在位时 shtc3_read 立即返回 false) */
+static void indoor_update(void) {
+    float t = 0, rh = 0;
+    if (!shtc3_read(&t, &rh)) return;               /* 保留上次的值, 不清零 */
+    s_state.indoor_valid   = true;
+    s_state.indoor_temp_x10 = (int16_t)(t * 10.0f + (t < 0 ? -0.5f : 0.5f));
+    s_state.indoor_rh      = (uint8_t)(rh + 0.5f);
+    ESP_LOGI(TAG, "INDOOR %.1f°C %u%%", t, s_state.indoor_rh);
+}
+
 /* ── 查询任务 (方案B: 查完断网省电) ──
  *
  * 周期: 唤醒 → 连 WiFi → 等时间同步 → 查询 → 关射频 → 睡 poll_min 分钟 → 周而复始
@@ -336,6 +347,9 @@ void app_main(void)
     /* 电池 ADC (可选) */
     bat_adc_init();
 
+    /* 板载 SHTC3 室内温湿度 (可选; 不在位则静默关闭) */
+    shtc3_init();
+
     /* RLCD + LVGL 初始化 (先起屏幕, 配网页也要显示) */
     rlcd_config_t rlcd_cfg = {
         .width  = DISPLAY_WIDTH,
@@ -407,6 +421,7 @@ void app_main(void)
         /* 电池: 每 30s, 且只在射频关闭时采 (WiFi 发射会拉低电压, 影响 OCV 判读) */
         if (now - last_bat > 30000 && !wifi_mgr_radio_on()) {
             bat_update();
+            indoor_update();
             last_bat = now;
         }
 

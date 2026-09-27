@@ -297,6 +297,14 @@ void ui_init(ui_elements_t *ui) {
     lv_obj_set_width(ui->wx_unit, LV_SIZE_CONTENT);
     lv_label_set_text(ui->wx_unit, "度");
 
+    /* 室内温度 (板载 SHTC3): 与室外大温度同行、右对齐 —— 正好落在下方
+     * "湿度 88%" 的正上方, 形成一个右对齐的信息列, 不打断左侧大温度。
+     * 行高 18 → y=35 时视觉中心 44, 与 36px 大温度 (中心 44) 对齐。 */
+    ui->wx_in = label(ui->page_weather, 266, 35, 120);
+    lv_obj_set_style_text_align(ui->wx_in, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_long_mode(ui->wx_in, LV_LABEL_LONG_DOT);
+    lv_label_set_text(ui->wx_in, "");
+
     ui->wx_desc = label(ui->page_weather, 104, 70, 140);
     lv_label_set_long_mode(ui->wx_desc, LV_LABEL_LONG_DOT);
     ui->wx_hum  = label(ui->page_weather, 250, 70, 136);
@@ -657,6 +665,14 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
             lv_label_set_text(ui->wx_desc, s->wx.err[0] ? s->wx.err : "查询中...");
             lv_label_set_text(ui->wx_hum, "");
             lv_label_set_text(ui->wx_meta, "");
+        }
+
+        /* 室内温度 (板载 SHTC3): 与天气是否查询成功无关, 独立显示 */
+        if (s->indoor_valid) {
+            snprintf(b, sizeof(b), "室内 %.1f度", s->indoor_temp_x10 / 10.0);
+            lv_label_set_text(ui->wx_in, b);
+        } else {
+            lv_label_set_text(ui->wx_in, "");
         }
 
         /* ── 天气预警横幅 (黑底白字, 最强制) ──

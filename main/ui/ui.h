@@ -63,6 +63,7 @@ typedef struct {
     lv_obj_t *wx_icon;             /* 当前天气大图标 (font_wx_icon_36) */
     lv_obj_t *wx_temp;             /* 当前温度 (font_wx_num_36) */
     lv_obj_t *wx_unit;             /* "度" */
+    lv_obj_t *wx_in;               /* 室内温度 (板载 SHTC3), 与 wx_temp 同行右侧 */
     lv_obj_t *wx_desc;             /* 天气文字 */
     lv_obj_t *wx_hum;              /* 湿度 */
     lv_obj_t *wx_alert_box;        /* 预警横幅 (黑底) */

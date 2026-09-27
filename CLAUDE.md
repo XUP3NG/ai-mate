@@ -13,6 +13,11 @@ ESP32-S3 + RLCD 4.2" 反射式墨水屏（400×300，1-bit 黑白），**WiFi �
 | 通信 | WiFi STA (查询) + SoftAP (配网门户) |
 | 按键 | BOOT (GPIO0) 长按 3s 重新配网 |
 | 电池 | ADC GPIO2 (ADC1_CH3, 板载 100k/300k 分压, ×3) |
+| 室内温湿度 | 板载 SHTC3, I2C 0x70, SDA=GPIO13 SCL=GPIO14 |
+
+> 板上还有一堆没用到的资源: ES8311 codec + ES7210 双麦 + 喇叭座 (I2S: 8/9/10/16/45, 功放使能 46)、
+> PCF85063 RTC (同一 I2C 总线)、TF 卡槽、KEY 键 (GPIO18)、8MB PSRAM、11MB 空闲 Flash。
+> 官方引脚表: <https://devices.esphome.io/devices/waveshare-esp32-s3-rlcd-42/>
 
 屏幕引脚: MOSI=12 SCLK=11 CS=40 DC=5 RST=41 TE=6
 
@@ -91,6 +96,7 @@ main/
 ├── wifi_mgr.c/h       # STA 多网络择优 + AP 配网门户 + 射频开关
 ├── net_query.c/h      # 智谱/DeepSeek、SNTP、消费历史、通用 HTTPS GET、gzip(puff) 解码
 ├── weather.c/h        # 双数据源天气 + 预警 + 分钟级降水 + IP/城市定位 + 图标映射
+├── shtc3.c/h          # 板载 SHTC3 室内温湿度 (I2C 0x70, 用新版 i2c_master API)
 └── ui/                # ui.c/h + font_cjk_16 + font_wx_icon_36/24 + font_wx_num_36
 components/rlcd_display/  # ST7305 驱动
 components/puff/          # DEFLATE 解压 (Mark Adler, 公共领域)
@@ -101,6 +107,8 @@ components/puff/          # DEFLATE 解压 (Mark Adler, 公共领域)
 天气页布局要点（**按导出字体真实度量排布**）：
 - 字体行高：`font_cjk_16`=18（≠16!）, `font_wx_icon_36`=36, `font_wx_num_36`=28（≠36!）, Montserrat20=22
 - 图标与温度**视觉中心对齐**（同为 44）：icon y=26、temp y=30
+- **室内温度**（板载 SHTC3）在温度行右端：`wx_in` x=266 y=35 w=120 右对齐（行高 18 → 中心 44，
+  与 36px 大温度同轴；右边缘 386 与"湿度 88%"对齐成一列）。传感器不在位时留空，不显示占位符
 - 预警横幅**动态占位**：有预警时 100..120（黑底白字反白），无预警时下方内容上移 26px、柱高上限 20→46px
 - **所有动态文本标签必须设 `LV_LABEL_LONG_DOT`**，否则超长会换行压住下一行（已踩坑：峰值标签）
 
