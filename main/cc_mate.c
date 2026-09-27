@@ -183,6 +183,7 @@ static void bat_update(void) {
     static uint32_t s_trend_t0 = 0;
     static uint16_t s_trend_mv0 = 0;
     static bool s_trend_charging = false;
+    static uint32_t s_last_rise_s = 0;               /* 最近一次观察到"在上升"的时刻 */
     uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000);
     if (s_trend_t0 == 0) {
         s_trend_t0 = now_s;
@@ -190,6 +191,7 @@ static void bat_update(void) {
     } else if (now_s - s_trend_t0 >= 600) {          /* 每 10 分钟评估一次趋势 */
         int32_t delta = (int32_t)s_mv_ema - (int32_t)s_trend_mv0;
         s_trend_charging = (delta >= 15);            /* 10 分钟涨 ≥15mV → 在充 */
+        if (delta >= 5) s_last_rise_s = now_s;       /* 记录"确实在上升" */
         if (s_trend_charging) {
             ESP_LOGI(TAG, "BAT trend: +%d mV / %u s → charging", (int)delta,
                      (unsigned)(now_s - s_trend_t0));
@@ -203,9 +205,13 @@ static void bat_update(void) {
 
     /* ── 自动学习满电电压 ──
      * 充电器进入恒压阶段后电压会长时间纹丝不动 (这时"趋势在充电"已不成立),
-     * 因此判据不用 charging, 而是: 电压足够高(≥4.0V) 且 30 分钟内波动 ≤3mV。
-     * 这两种情形下该电压都代表"已充满": 要么充电器稳压于此, 要么刚充满静置。 */
-    if (s_full_auto && s_mv_ema >= 4000.0f) {
+     * 故判据为: 电压 ≥4.0V 且 30 分钟内波动 ≤3mV。
+     *
+     * 但"长时间稳定"在放电时同样成立 (轻载下 30 分钟只降不到 1mV), 若不加限制
+     * 会把放电平台误学成"满电", 参考值越学越低、电量虚高。
+     * 因此额外要求: 最近 1 小时内观察到过电压上升 (说明确实在充电)。 */
+    bool rose_recently = (s_last_rise_s != 0) && ((now_s - s_last_rise_s) <= 3600);
+    if (s_full_auto && s_mv_ema >= 4000.0f && rose_recently) {
         if (s_plateau_mv == 0 || abs((int)s_mv_ema - (int)s_plateau_mv) > 3) {
             s_plateau_mv = (uint16_t)s_mv_ema;
             s_plateau_ms = 0;
