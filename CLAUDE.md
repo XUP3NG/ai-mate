@@ -81,6 +81,23 @@ NVS `ai_hist`: `cents[63]`(分) `base` `dbase` `rechg` `lbal` `lepo`（坐标键
   电量 = `bat_pct_from_mv(mv × 4200 / full)`；充到 4.2V 则退回默认 4200。配网页 `bfull` 可手动指定（手动优先，不再自动学）。
   **必须带"最近 1 小时见过电压上升"这道闸门**：放电时轻载电压也会 30 分钟稳定不动，否则会把放电平台误学成满电，参考值越学越低、电量虚高。
 
+## AI 每日像素画 (Page 4)
+
+每天一次调 DeepSeek `chat/completions` 生成 40×30 的 1-bit 点阵画, UI 用 8×8 块放大成 320×240。
+
+- **画布一定要小**：文本模型对大画布空间控制力差, 80×60 出来全是抽象色块, **40×30 才画得出可辨认的剪影**
+- prompt 三要素: ①给**具体实物候选清单**(猫/灯塔/帆船/蘑菇/雪人…, 别让它"自由联想") ②密度约束
+  (主体占 60~80%、黑点占 15~35%) ③给一段**风格示例**(示范密度与留白)
+- `temperature=0.9`（高温度更抽象）、`max_tokens=2500`（1200 字符足够）
+- 解析: 找 `标题：xxx` 行 + 收集只含 `#`/`.` 且长度 ≥ ART_W/2 的行; 行数不足则垂直居中补白;
+  黑点占比 <4% 或 >45% 判为模型抽风, 丢弃
+- 成品会**逐行打到串口日志**(`art: |....|`)——不看屏幕也能判断画得像不像
+- 成本: 输出约 1200 字符 ≈ 1K token, **每天几分钱**; 实测一次 2~5 秒
+- **prompt 版本号 `ART_PROMPT_VER`**：改画法时 +1 → 已存的老画自动作废重画一次（之后恢复每日一次）；
+  重试计数按 (日 + 版本) 双键持久化, 否则改版当天会一直重试重复扣费
+- 存储 NVS `ai_art`: `day`/`ver`(成功) `tryd`/`tryv`/`try`(当日尝试) `title` `px`(150B 位图)
+- 画布缓冲 320×240 RGB565 = 150KB **放 PSRAM**（`heap_caps_malloc(MALLOC_CAP_SPIRAM)`）
+
 ## 省电
 
 CPU 80MHz + `CONFIG_PM_ENABLE` + tickless idle + `WIFI_PS_MAX_MODEM`，
@@ -104,12 +121,15 @@ main/
 ├── net_query.c/h      # 智谱/DeepSeek、SNTP、消费历史、通用 HTTPS GET、gzip(puff) 解码
 ├── weather.c/h        # 双数据源天气 + 预警 + 分钟级降水 + IP/城市定位 + 图标映射
 ├── shtc3.c/h          # 板载 SHTC3 室内温湿度 (I2C 0x70, 用新版 i2c_master API)
+├── art.c/h            # AI 每日像素画 (DeepSeek 生成 40×30 点阵)
 └── ui/                # ui.c/h + font_cjk_16 + font_wx_icon_36/24 + font_wx_num_36
 components/rlcd_display/  # ST7305 驱动
 components/puff/          # DEFLATE 解压 (Mark Adler, 公共领域)
 ```
 
-## UI (4 页：额度 / 消费柱状图 / 配网 / 天气)
+## UI (5 页：额度 / 消费柱状图 / 配网 / 天气 / 像素画)
+
+轮播顺序 `order[] = {0, 1, 3, 4}`（配网页 2 不参与），每页 15 秒。
 
 天气页布局要点（**按导出字体真实度量排布**）：
 - 字体行高：`font_cjk_16`=18（≠16!）, `font_wx_icon_36`=36, `font_wx_num_36`=28（≠36!）, Montserrat20=22
