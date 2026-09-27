@@ -319,18 +319,23 @@ void ui_init(ui_elements_t *ui) {
     lv_label_set_long_mode(ui->wx_in, LV_LABEL_LONG_DOT);
     lv_label_set_text(ui->wx_in, "");
 
-    /* 第二行: 天气描述 | 体感温度 | 空气质量(右端)
-     * 固定 x 而非动态对齐 —— 三个都可能有长文本, 固定格位保证永远不会互相压住 */
-    ui->wx_desc = label(ui->page_weather, 68, 70, 104);
+    /* 第二行: 天气描述 | 体感 | 风力(图标) | 空气质量(图标)
+     * 四组固定格位: 组内图标与文字 ~2px, 组间 ~8-10px, 任何内容都不互相压住 */
+    ui->wx_desc = label(ui->page_weather, 68, 70, 56);
     lv_label_set_long_mode(ui->wx_desc, LV_LABEL_LONG_DOT);
 
-    ui->wx_feel = label(ui->page_weather, 180, 70, 96);
+    ui->wx_feel = label(ui->page_weather, 132, 70, 96);
     lv_label_set_long_mode(ui->wx_feel, LV_LABEL_LONG_DOT);
 
-    /* 空气质量: 图标(air-quality) + 类别/数值, 图标代替"空气"两个字 */
-    ui->wx_aqi_icon = label(ui->page_weather, 290, 70, 18);
+    ui->wx_wind_icon = label(ui->page_weather, 238, 70, 16);
+    lv_obj_set_style_text_font(ui->wx_wind_icon, &font_qw_16, 0);
+
+    ui->wx_wind = label(ui->page_weather, 256, 70, 34);
+    lv_label_set_long_mode(ui->wx_wind, LV_LABEL_LONG_DOT);
+
+    ui->wx_aqi_icon = label(ui->page_weather, 300, 70, 16);
     lv_obj_set_style_text_font(ui->wx_aqi_icon, &font_qw_16, 0);
-    ui->wx_aqi = label(ui->page_weather, 306, 70, 80);
+    ui->wx_aqi = label(ui->page_weather, 316, 70, 70);
     lv_obj_set_style_text_align(ui->wx_aqi, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_long_mode(ui->wx_aqi, LV_LABEL_LONG_DOT);
 
@@ -709,6 +714,16 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
                 b[0] = '\0';
             lv_label_set_text(ui->wx_feel, b);
 
+            /* 风力: 图标 + 蒲福风级 */
+            if (s->wx.wind_valid) {
+                lv_label_set_text(ui->wx_wind_icon, wx_wind_icon());
+                snprintf(b, sizeof(b), "%u级", s->wx.wind_scale);
+                lv_label_set_text(ui->wx_wind, b);
+            } else {
+                lv_label_set_text(ui->wx_wind_icon, "");
+                lv_label_set_text(ui->wx_wind, "");
+            }
+
             /* 空气质量: 图标代替"空气"二字; 类别超过 2 字 (轻度污染…) 时不带数值 */
             if (s->wx.aqi_valid) {
                 lv_label_set_text(ui->wx_aqi_icon, wx_aqi_icon());
@@ -738,6 +753,8 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
             lv_label_set_text(ui->wx_desc, s->wx.err[0] ? s->wx.err : "查询中...");
             lv_label_set_text(ui->wx_hum, "");
             lv_label_set_text(ui->wx_feel, "");
+            lv_label_set_text(ui->wx_wind_icon, "");
+            lv_label_set_text(ui->wx_wind, "");
             lv_label_set_text(ui->wx_aqi_icon, "");
             lv_label_set_text(ui->wx_aqi, "");
             lv_label_set_text(ui->wx_meta, "");

@@ -108,6 +108,8 @@ typedef struct {
     uint8_t  humidity;              /* 当前湿度 % */
     int16_t  feels_x10;             /* 体感温度 (0.1°C) */
     bool     feels_valid;           /* 体感温度是否有效 */
+    uint8_t  wind_scale;            /* 蒲福风级 (0-12) */
+    bool     wind_valid;
     /* 空气质量 (和风独有; Open-Meteo 无此数据) */
     bool     aqi_valid;
     uint16_t aqi;                   /* 中国标准 AQI */

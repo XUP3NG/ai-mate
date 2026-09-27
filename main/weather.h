@@ -54,6 +54,16 @@ const char *wmo_icon(uint8_t code);
 /* 空气质量图标 (QWeather Icons air-quality, UTF-8; 静态缓冲) */
 const char *wx_aqi_icon(void);
 
+/* 风力图标 (QWeather Icons wind, UTF-8; 静态缓冲) */
+const char *wx_wind_icon(void);
+
+/* 码点 → UTF-8 (QWeather Icons PUA 区; 供 UI 行内小图标用) */
+void wx_icon_utf8(int cp, char *out, size_t sz);
+
+/* 图标码点: 风 / 空气质量 (与 ui/font_qw_*.c 的 --range 对应) */
+#define WX_ICON_WIND   0xF21A
+#define WX_ICON_AIRQ   0xF2E6
+
 #ifdef __cplusplus
 }
 #endif

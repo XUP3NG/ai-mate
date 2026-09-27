@@ -67,6 +67,8 @@ typedef struct {
     lv_obj_t *wx_desc;             /* 天气文字 */
     lv_obj_t *wx_hum;              /* 湿度 */
     lv_obj_t *wx_feel;             /* 体感温度 (第二行) */
+    lv_obj_t *wx_wind_icon;        /* 风力图标 (font_qw_16) */
+    lv_obj_t *wx_wind;             /* 风级 (第二行) */
     lv_obj_t *wx_aqi_icon;         /* 空气质量图标 (font_qw_16, 和风独有) */
     lv_obj_t *wx_aqi;              /* 空气质量类别/数值 (第二行右端, 和风独有) */
     lv_obj_t *wx_alert_box;        /* 预警横幅 (黑底) */

@@ -166,6 +166,7 @@ static const qw_icon_map_t QW_ICON_MAP[] = {
 };
 #define QW_ICON_UNKNOWN 0xF146   /* unknown */
 #define QW_ICON_AIRQ    0xF2E6   /* air-quality */
+#define QW_ICON_WIND    0xF21A   /* wind */
 
 static int qw_cp(int code) {
     for (unsigned i = 0; i < sizeof(QW_ICON_MAP) / sizeof(QW_ICON_MAP[0]); i++)
@@ -173,7 +174,7 @@ static int qw_cp(int code) {
     return QW_ICON_UNKNOWN;
 }
 
-static void icon_utf8(int cp, char *out, size_t sz) {
+void wx_icon_utf8(int cp, char *out, size_t sz) {
     if (sz < 4) return;
     out[0] = (char)(0xE0 | (cp >> 12));
     out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
@@ -205,17 +206,23 @@ const char *wmo_icon(uint8_t code) {
     else if (code == 95)               q = 302;      /* 雷阵雨 */
     else if (code == 96 || code == 99) q = 304;      /* 雷阵雨伴冰雹 */
     else                               q = 999;
-    icon_utf8(qw_cp(q), out, sizeof(out));
+    wx_icon_utf8(qw_cp(q), out, sizeof(out));
     return out;
 }
 
 static void qw_icon(const char *code, char *out, size_t sz) {
-    icon_utf8(qw_cp(atoi(code ? code : "0")), out, sz);
+    wx_icon_utf8(qw_cp(atoi(code ? code : "0")), out, sz);
 }
 
 const char *wx_aqi_icon(void) {
     static char out[4];
-    icon_utf8(QW_ICON_AIRQ, out, sizeof(out));
+    wx_icon_utf8(QW_ICON_AIRQ, out, sizeof(out));
+    return out;
+}
+
+const char *wx_wind_icon(void) {
+    static char out[4];
+    wx_icon_utf8(QW_ICON_WIND, out, sizeof(out));
     return out;
 }
 
@@ -484,11 +491,18 @@ static bool geocode(const char *city, int32_t *lat, int32_t *lon) {
 
 /* ── 数据源 1: Open-Meteo ── */
 
+/* m/s → 蒲福风级 (GB/T 35221 阈值) */
+static uint8_t ms_to_beaufort(double ms) {
+    static const double t[] = {0.3,1.6,3.4,5.5,8.0,10.8,13.9,17.2,20.8,24.5,28.5,32.7};
+    for (int i = 0; i < 12; i++) if (ms < t[i]) return (uint8_t)i;
+    return 12;
+}
+
 static bool fetch_openmeteo(weather_info_t *wx, int32_t lat, int32_t lon) {
     char url[360];
     snprintf(url, sizeof(url),
              OM_URL "?latitude=%.4f&longitude=%.4f"
-             "&current=temperature_2m,relative_humidity_2m,weather_code,apparent_temperature"
+             "&current=temperature_2m,relative_humidity_2m,weather_code,apparent_temperature,wind_speed_10m"
              "&daily=weather_code,temperature_2m_max,temperature_2m_min"
              "&hourly=precipitation_probability,precipitation,weather_code"
              "&forecast_days=%d&forecast_hours=%d&timezone=Asia%%2FShanghai",
@@ -522,6 +536,10 @@ static bool fetch_openmeteo(weather_info_t *wx, int32_t lat, int32_t lon) {
         if ((j = cJSON_GetObjectItem(cur, "apparent_temperature")) && cJSON_IsNumber(j)) {
             wx->feels_x10 = (int16_t)(j->valuedouble * 10);
             wx->feels_valid = true;
+        }
+        if ((j = cJSON_GetObjectItem(cur, "wind_speed_10m")) && cJSON_IsNumber(j)) {
+            wx->wind_scale = ms_to_beaufort(j->valuedouble);   /* m/s → 蒲福风级 */
+            wx->wind_valid = true;
         }
         if ((j = cJSON_GetObjectItem(cur, "weather_code")) && cJSON_IsNumber(j)) {
             uint8_t code = (uint8_t)j->valuedouble;
@@ -782,6 +800,14 @@ static bool fetch_qweather(weather_info_t *wx, const app_config_t *cfg, int32_t 
         if (v && cJSON_IsNumber(v)) {
             wx->feels_x10 = (int16_t)(v->valuedouble * 10);
             wx->feels_valid = true;
+        }
+    }
+    cJSON *jw = cJSON_GetObjectItem(root, "wind");          /* 风: scale = 蒲福风级 */
+    if (jw) {
+        cJSON *js = cJSON_GetObjectItem(jw, "scale");
+        if (js && cJSON_IsNumber(js)) {
+            wx->wind_scale = (uint8_t)js->valuedouble;
+            wx->wind_valid = true;
         }
     }
     cJSON_Delete(root);
