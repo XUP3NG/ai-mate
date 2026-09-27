@@ -130,8 +130,27 @@ static void bat_update(void) {
 
     s_state.battery_mv = (uint16_t)s_mv_ema;
     s_state.battery_pct = bat_pct_from_mv((uint32_t)s_mv_ema);
-    /* 充电判定: 电压接近满充且高于平台区 */
-    s_state.battery_charging = (s_mv_ema >= 4150.0f);
+
+    /* 充电判定: 满充电压, 或短时间内电压持续上升 (深放电时电压低但确在充电) */
+    static uint32_t s_trend_t0 = 0;
+    static uint16_t s_trend_mv0 = 0;
+    static bool s_trend_charging = false;
+    uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000);
+    if (s_trend_t0 == 0) {
+        s_trend_t0 = now_s;
+        s_trend_mv0 = (uint16_t)s_mv_ema;
+    } else if (now_s - s_trend_t0 >= 600) {          /* 每 10 分钟评估一次趋势 */
+        int32_t delta = (int32_t)s_mv_ema - (int32_t)s_trend_mv0;
+        s_trend_charging = (delta >= 15);            /* 10 分钟涨 ≥15mV → 在充 */
+        if (s_trend_charging) {
+            ESP_LOGI(TAG, "BAT trend: +%d mV / %u s → charging", (int)delta,
+                     (unsigned)(now_s - s_trend_t0));
+        }
+        s_trend_t0 = now_s;
+        s_trend_mv0 = (uint16_t)s_mv_ema;
+    }
+
+    s_state.battery_charging = (s_mv_ema >= 4150.0f) || s_trend_charging;
 
     ESP_LOGI(TAG, "BAT pin=%" PRIu32 "mV pack=%.0fmV pct=%u%%%s",
              pin_mv, s_mv_ema, s_state.battery_pct,

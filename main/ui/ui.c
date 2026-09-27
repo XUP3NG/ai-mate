@@ -480,8 +480,12 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
     /* ── 底部状态: [SSID ·] [电压 ·] 更新时间 ── */
     {
         uint32_t g = s->glm.last_ok_ms, d = s->dsk.last_ok_ms;
-        char seg[4][48];
+        char seg[5][48];
         int nseg = 0;
+
+        /* 低电量优先告警 */
+        if (s->battery_configured && !s->battery_charging && s->battery_pct <= 10)
+            snprintf(seg[nseg++], sizeof(seg[0]), "电量低 %d%%", s->battery_pct);
 
         if (s->ssid[0] && s->net == NET_CONNECTED)
             snprintf(seg[nseg++], sizeof(seg[0]), "%s", s->ssid);
