@@ -130,6 +130,13 @@ typedef struct {
     char     err[48];
 } weather_info_t;
 
+/* ── AI 每日像素画 (DeepSeek 生成) ── */
+typedef struct {
+    bool     valid;             /* 有可显示的画 (NVS 里的也算) */
+    bool     generating;        /* 正在生成 (UI 显示提示) */
+    char     title[24];         /* 画的标题 */
+} art_info_t;
+
 /* ── 全局应用状态 ── */
 typedef struct {
     net_state_t net;
@@ -137,6 +144,7 @@ typedef struct {
     dsk_info_t  dsk;
     hist_info_t hist;
     weather_info_t wx;
+    art_info_t  art;
 
     bool     time_valid;        /* SNTP 已同步 */
     uint32_t boot_ms;           /* 开机毫秒 (用于显示运行时长) */

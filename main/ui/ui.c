@@ -10,6 +10,8 @@
 
 #include "ui.h"
 #include "weather.h"
+#include "art.h"
+#include "esp_heap_caps.h"
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
@@ -418,6 +420,34 @@ void ui_init(ui_elements_t *ui) {
         lv_obj_set_style_text_color(t6, c_dim(), 0);
         lv_label_set_text(t6, "长按 BOOT 键 3 秒可重新配网");
     }
+
+    /* ════ Page 4: AI 每日像素画 ════
+     * 80×60 点阵 → 4×4 块放大 = 320×240 (PSRAM RGB565 画布, 150KB) */
+    ui->page_art = lv_obj_create(scr);
+    lv_obj_set_size(ui->page_art, DISPLAY_WIDTH, DISPLAY_HEIGHT - 24);
+    lv_obj_set_pos(ui->page_art, 0, 24);
+    lv_obj_set_style_bg_color(ui->page_art, c_bg(), 0);
+    lv_obj_set_style_border_width(ui->page_art, 0, 0);
+    lv_obj_set_style_radius(ui->page_art, 0, 0);
+    lv_obj_set_style_pad_all(ui->page_art, 0, 0);
+    lv_obj_remove_flag(ui->page_art, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(ui->page_art, LV_OBJ_FLAG_HIDDEN);
+
+    ui->art_buf = heap_caps_malloc(320 * 240 * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    if (ui->art_buf) {
+        memset(ui->art_buf, 0xFF, 320 * 240 * sizeof(uint16_t));   /* 先铺白, 别显示随机数据 */
+        ui->art_canvas = lv_canvas_create(ui->page_art);
+        lv_canvas_set_buffer(ui->art_canvas, ui->art_buf, 320, 240, LV_COLOR_FORMAT_RGB565);
+        lv_obj_set_pos(ui->art_canvas, 40, 8);
+    }
+
+    ui->art_title = label(ui->page_art, 40, 254, 320);
+    lv_obj_set_style_text_align(ui->art_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(ui->art_title, LV_LABEL_LONG_DOT);
+
+    ui->art_hint = label(ui->page_art, 40, 130, 320);
+    lv_obj_set_style_text_align(ui->art_hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(ui->art_hint, "");
 }
 
 /* ── 格式化 ── */
@@ -820,6 +850,36 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
             lv_label_set_text(ui->wx_day_temp[i], b);
         }
     }
+
+    /* ── 像素画页 ── */
+    if (ui->art_buf) {
+        /* 版本号变了才重绘 40×30 → 320×240 (8×8 块) */
+        static int s_art_rev = -1;
+        if (s_art_rev != art_rev()) {
+            s_art_rev = art_rev();
+            const uint8_t *px = art_bitmap();
+            uint16_t *dst = (uint16_t *)ui->art_buf;
+            for (int r = 0; r < 30; r++) {
+                for (int c = 0; c < 40; c++) {
+                    uint16_t col = (px[r * 5 + (c >> 3)] & (0x80 >> (c & 7))) ? 0x0000 : 0xFFFF;
+                    for (int y = 0; y < 8; y++) {
+                        uint16_t *row = dst + (r * 8 + y) * 320 + c * 8;
+                        for (int x = 0; x < 8; x++) row[x] = col;
+                    }
+                }
+            }
+            lv_obj_invalidate(ui->art_canvas);
+        }
+        if (s->art.valid) {
+            snprintf(b, sizeof(b), "%s · DeepSeek 每日生成", s->art.title);
+            lv_label_set_text(ui->art_title, b);
+            lv_label_set_text(ui->art_hint, "");
+        } else {
+            lv_label_set_text(ui->art_title, "");
+            lv_label_set_text(ui->art_hint,
+                s->art.generating ? "今日像素画生成中… 约 1 分钟" : "等待网络生成今日像素画");
+        }
+    }
 }
 
 void ui_show_page(ui_elements_t *ui, int page) {
@@ -827,8 +887,10 @@ void ui_show_page(ui_elements_t *ui, int page) {
     lv_obj_add_flag(ui->page_heat, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(ui->page_portal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(ui->page_weather, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ui->page_art, LV_OBJ_FLAG_HIDDEN);
     if (page == 2)      lv_obj_remove_flag(ui->page_portal, LV_OBJ_FLAG_HIDDEN);
     else if (page == 1) lv_obj_remove_flag(ui->page_heat, LV_OBJ_FLAG_HIDDEN);
     else if (page == 3) lv_obj_remove_flag(ui->page_weather, LV_OBJ_FLAG_HIDDEN);
+    else if (page == 4) lv_obj_remove_flag(ui->page_art, LV_OBJ_FLAG_HIDDEN);
     else                lv_obj_remove_flag(ui->page_main, LV_OBJ_FLAG_HIDDEN);
 }

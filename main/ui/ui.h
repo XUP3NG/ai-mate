@@ -83,8 +83,15 @@ typedef struct {
     lv_obj_t *page_portal;
     lv_obj_t *portal_ap;
     lv_obj_t *portal_url;
+
+    /* ── Page 4: AI 每日像素画 ── */
+    lv_obj_t *page_art;
+    void     *art_buf;              /* 320×240 RGB565 画布缓冲 (PSRAM, 150KB) */
+    lv_obj_t *art_canvas;
+    lv_obj_t *art_title;            /* 底部: 标题 · DeepSeek 每日生成 */
+    lv_obj_t *art_hint;             /* 生成中/等待提示 */
 } ui_elements_t;
 
 void ui_init(ui_elements_t *ui);
 void ui_update(ui_elements_t *ui, app_state_t *s);
-void ui_show_page(ui_elements_t *ui, int page);   /* 0=总览 1=柱状图 2=配网 */
+void ui_show_page(ui_elements_t *ui, int page);   /* 0=总览 1=柱状图 2=配网 3=天气 4=像素画 */

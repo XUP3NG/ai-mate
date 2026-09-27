@@ -36,6 +36,12 @@ int net_https_get_ex(const char *url, const char *hdr_auth, const char *hdr_org,
  * 返回写入 out 的长度 (不含结尾 \0), <0 失败 */
 int net_http_body_decode(const char *in, int in_len, char *out, size_t outsz);
 
+/* 通用 HTTPS POST JSON (LLM 对话等): body 为 JSON 字符串, bearer 为完整 Authorization 值
+ * (如 "Bearer sk-xxx"), timeout_ms 单位毫秒 (LLM 生成可能要几十秒, 传大一点)。
+ * 返回 body 长度, <0 失败; 非 200 返回 -2 */
+int net_https_post_json(const char *url, const char *body, const char *bearer,
+                        int timeout_ms, char *buf, size_t bufsz);
+
 #ifdef __cplusplus
 }
 #endif

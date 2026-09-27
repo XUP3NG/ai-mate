@@ -16,6 +16,7 @@
 #include "net_query.h"
 #include "weather.h"
 #include "shtc3.h"
+#include "art.h"
 #include "ui/ui.h"
 #include "rlcd_display.h"
 #include "esp_lvgl_port.h"
@@ -281,6 +282,9 @@ static void net_task(void *arg) {
             s_last_wx = now_ms;
         }
 
+        /* AI 每日像素画: 一天一次, 自己内部判断 (时间未同步/今天已生成都会直接返回) */
+        art_poll(&s_state, &s_cfg);
+
         /* 时间未同步 (SNTP 未完成): 再等最多 10s 并补查一次, 保证消费历史有日期 */
         if (!s_state.time_valid) {
             for (int i = 0; i < 20 && !s_state.time_valid; i++) {
@@ -390,6 +394,7 @@ void app_main(void)
     net_query_init_time();
     bat_full_load(&s_cfg);           /* 满电电压参考: 配置值或上次学到的 */
     net_hist_sync(&s_state);         /* 先把 NVS 历史读出来, 柱状图开机即有数据 */
+    art_init(&s_state);              /* 昨天的像素画 (有就先显示) */
     wifi_mgr_connect_best(&s_cfg);   /* 扫描并连接信号最好的已保存网络 */
 
     xTaskCreatePinnedToCore(net_task, "net", 12288, NULL, 5, NULL, 1);
@@ -425,10 +430,10 @@ void app_main(void)
             last_bat = now;
         }
 
-        /* 页面轮播: 每 15s 切换 主页/柱状图/天气 (城市留空=IP 自动定位, 天气始终启用) */
+        /* 页面轮播: 每 15s 切换 主页/柱状图/天气/像素画 */
         if (now - page_start > 15000) {
-            static const int order[] = { 0, 1, 3 };   /* 0=主页 1=柱状图 3=天气 (2=配网不参与轮播) */
-            page = (page + 1) % 3;
+            static const int order[] = { 0, 1, 3, 4 };   /* 0=主页 1=柱状图 3=天气 4=像素画 (2=配网不参与轮播) */
+            page = (page + 1) % 4;
             page_start = now;
             lvgl_port_lock(-1);
             ui_show_page(&s_ui, order[page]);

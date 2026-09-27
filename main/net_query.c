@@ -82,6 +82,45 @@ int net_https_get(const char *url, const char *hdr_auth, const char *hdr_org,
     return net_https_get_ex(url, hdr_auth, hdr_org, hdr_proj, NULL, buf, bufsz);
 }
 
+/* ── HTTP POST JSON 工具 (LLM 对话等长耗时接口) ── */
+int net_https_post_json(const char *url, const char *body, const char *bearer,
+                        int timeout_ms, char *buf, size_t bufsz) {
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = timeout_ms,
+    };
+    esp_http_client_handle_t cl = esp_http_client_init(&cfg);
+    if (!cl) return -1;
+    esp_http_client_set_method(cl, HTTP_METHOD_POST);
+    esp_http_client_set_header(cl, "Content-Type", "application/json");
+    if (bearer) esp_http_client_set_header(cl, "Authorization", bearer);
+    esp_http_client_set_header(cl, "Accept-Encoding", "identity");
+
+    int n = 0, status = -1;
+    esp_err_t err = esp_http_client_open(cl, strlen(body));
+    if (err == ESP_OK) {
+        int w = esp_http_client_write(cl, body, strlen(body));
+        if (w > 0) {
+            esp_http_client_fetch_headers(cl);
+            while (n < (int)bufsz - 1) {
+                int r = esp_http_client_read(cl, buf + n, bufsz - 1 - n);
+                if (r <= 0) break;
+                n += r;
+            }
+            buf[n] = '\0';
+            status = esp_http_client_get_status_code(cl);
+        }
+    }
+    esp_http_client_close(cl);
+    esp_http_client_cleanup(cl);
+    if (status != 200) {
+        ESP_LOGW(TAG, "POST %s -> %d", url, status);
+        return -2;
+    }
+    return n;
+}
+
 /* ── 响应体解码: gzip → 明文 ──
  * 部分服务端 (如和风天气) 无视 Accept-Encoding: identity 直接回 gzip。
  * ESP-IDF 无 zlib/miniz 组件, 故内置 puff (DEFLATE 解压) 自行处理 gzip 容器。

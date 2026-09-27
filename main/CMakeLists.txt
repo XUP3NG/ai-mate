@@ -6,6 +6,7 @@ idf_component_register(
         "net_query.c"
         "weather.c"
         "shtc3.c"
+        "art.c"
         "ui/ui.c"
         "ui/font_cjk_16.c"
         "ui/font_wx_icon_36.c"
