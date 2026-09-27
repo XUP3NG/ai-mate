@@ -94,6 +94,12 @@ typedef struct {
     char     dicon[WX_DAYS][8];     /* 每日图标 */
     int16_t  tmax_x10[WX_DAYS];
     int16_t  tmin_x10[WX_DAYS];
+    /* 未来几小时降水提醒 (逐小时预报推算) */
+    bool     rain_valid;            /* 逐小时数据是否拿到 */
+    uint8_t  rain_in_hours;         /* 几小时后开始降水 (0=窗口内无) */
+    uint8_t  rain_prob;             /* 窗口内最大降水概率 % */
+    char     rain_icon[8];
+    char     rain_text[48];         /* 如 "2小时后有雨 (68%)" / "未来6小时无降水" */
     uint32_t last_ok_ms;
     char     err[48];
 } weather_info_t;

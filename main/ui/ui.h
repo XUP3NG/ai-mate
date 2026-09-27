@@ -65,6 +65,7 @@ typedef struct {
     lv_obj_t *wx_unit;             /* "度" */
     lv_obj_t *wx_desc;             /* 天气文字 */
     lv_obj_t *wx_hum;              /* 湿度 */
+    lv_obj_t *wx_rain;             /* 未来几小时降水提醒 */
     lv_obj_t *wx_day[WX_DAYS];         /* 预报日期标签 (今天/明天/周X) */
     lv_obj_t *wx_day_icon[WX_DAYS];    /* 预报图标 (font_wx_icon_24) */
     lv_obj_t *wx_day_temp[WX_DAYS];    /* 预报高低温 (montserrat_20) */

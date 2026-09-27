@@ -75,12 +75,16 @@ ESP32-S3 + 4.2" 反射式墨水屏（400×300 纯黑白），**WiFi 直连**查�
 │    ☁          27.0 度                     │
 │   (36px)      阴              湿度 64%    │
 │ ──────────────────────────────────────── │
+│ ☔ 1小时后有雨 (57%)                       │  未来 6 小时降水提醒
 │    今天       明天       周三       周四   │
 │     ☁         ☂         ☀         ☀     │
 │   30/22     28/20     31/21     32/22    │
 │ 数据源 Open-Meteo                         │
 └──────────────────────────────────────────┘
 ```
+
+**降水提醒**：用逐小时预报推算未来 **6 小时**内是否有降水（降水量 > 0.05mm 或概率 ≥ 50%），
+显示「N小时后有雨 (概率%)」，雪天显示 ❄ 并写「有雪」；无降水显示「未来6小时无降水」。
 
 ### 配网页（AP 模式）
 
@@ -96,8 +100,8 @@ ESP32-S3 + 4.2" 反射式墨水屏（400×300 纯黑白），**WiFi 直连**查�
 |------|------|
 | 智谱额度 | `GET https://bigmodel.cn/api/monitor/usage/quota/limit?type=1`，Header: `Authorization`(raw key) + `bigmodel-organization` + `bigmodel-project` |
 | DeepSeek 余额 | `GET https://api.deepseek.com/user/balance`，Header: `Authorization: Bearer <key>` |
-| 天气（默认） | `GET https://api.open-meteo.com/v1/forecast`（免 Key） |
-| 天气（可选） | `GET https://<你的API Host>/weather/v1/current/{lat}/{lon}` 与 `/weather/v1/daily/{lat}/{lon}`，Header: `X-QW-Api-Key`（和风天气） |
+| 天气（默认） | `GET https://api.open-meteo.com/v1/forecast`（免 Key，含 current/daily/hourly） |
+| 天气（可选） | `GET https://<你的API Host>/weather/v1/{current,daily,hourly}/{lat}/{lon}`，Header: `X-QW-Api-Key`（和风天气） |
 | 城市定位 | `GET https://geocoding-api.open-meteo.com/v1/search`（免 Key） |
 | IP 定位 | `http://ip-api.com/json/`（主）/ `https://api.ip.sb/geoip`（备），免 Key |
 | 时间 | SNTP `ntp.aliyun.com` / `pool.ntp.org` |
@@ -129,7 +133,7 @@ ESP32-S3 + 4.2" 反射式墨水屏（400×300 纯黑白），**WiFi 直连**查�
 | Open-Meteo（默认） | 不需要 | 全球覆盖，国内精度一般 | 免费无配额 |
 | [和风天气](https://dev.qweather.com) | 需 API Host + API Key | 国内 1 公里分辨率、分钟级更新、中文天气现象 | 每自然月**前 5 万次免费**，之后 ¥0.0007/次 |
 
-天气刷新与轮询**解耦**：默认 30 分钟一次（配网页可调 5–240 分钟）。按默认设置约 **1,440 次/月**，仅占和风免费额度的 3%。
+天气刷新与轮询**解耦**：默认 30 分钟一次（配网页可调 5–240 分钟）。和风路径每次查询 3 个接口（实时/每日/逐小时），按默认设置约 **4,320 次/月**，占和风免费额度的 8.6%；Open-Meteo 路径只需 1 次请求且免 Key。
 
 > 数据来源标注：使用和风天气时，天气页页脚显示「数据源 和风天气」（这是和风[服务条款](https://dev.qweather.com/docs/terms/attribution/)的要求）。
 >

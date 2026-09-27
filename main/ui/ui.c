@@ -300,18 +300,21 @@ void ui_init(ui_elements_t *ui) {
         (void)sep;
     }
 
+    /* 未来几小时降水提醒 (逐小时预报推算) */
+    ui->wx_rain = label(ui->page_weather, 16, 110, 372);
+
     /* 4 列预报 */
     {
         int col_x[WX_DAYS] = { 8, 104, 200, 296 };   /* 每列 96 宽, 内容居中 */
         for (int i = 0; i < WX_DAYS; i++) {
-            ui->wx_day[i] = label(ui->page_weather, col_x[i], 126, 96);
+            ui->wx_day[i] = label(ui->page_weather, col_x[i], 134, 96);
             lv_obj_set_style_text_align(ui->wx_day[i], LV_TEXT_ALIGN_CENTER, 0);
 
-            ui->wx_day_icon[i] = label(ui->page_weather, col_x[i], 154, 96);
+            ui->wx_day_icon[i] = label(ui->page_weather, col_x[i], 160, 96);
             lv_obj_set_style_text_align(ui->wx_day_icon[i], LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_set_style_text_font(ui->wx_day_icon[i], &font_wx_icon_24, 0);
 
-            ui->wx_day_temp[i] = label(ui->page_weather, col_x[i], 192, 96);
+            ui->wx_day_temp[i] = label(ui->page_weather, col_x[i], 196, 96);
             lv_obj_set_style_text_align(ui->wx_day_temp[i], LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_set_style_text_font(ui->wx_day_temp[i], &lv_font_montserrat_20, 0);
         }
@@ -623,6 +626,17 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
             lv_label_set_text(ui->wx_desc, s->wx.err[0] ? s->wx.err : "查询中...");
             lv_label_set_text(ui->wx_hum, "");
             lv_label_set_text(ui->wx_meta, "");
+        }
+
+        /* 未来几小时降水提醒 */
+        if (s->wx.valid && s->wx.rain_valid) {
+            if (s->wx.rain_icon[0])
+                snprintf(b, sizeof(b), "%s %s", s->wx.rain_icon, s->wx.rain_text);
+            else
+                snprintf(b, sizeof(b), "%s", s->wx.rain_text);
+            lv_label_set_text(ui->wx_rain, b);
+        } else {
+            lv_label_set_text(ui->wx_rain, "");
         }
 
         /* 4 列预报 */

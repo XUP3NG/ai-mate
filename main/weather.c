@@ -31,6 +31,48 @@ static const char *TAG = "wx";
 static char s_buf[WX_BUF];       /* 接收缓冲 (可能是 gzip) */
 static char s_dec[WX_BUF];       /* 解码后的 JSON (zlib 解压输出) */
 
+/* ── 未来几小时降水提醒 ──
+ * 用逐小时预报推算: 窗口内首个"有降水或概率≥50%"的小时数。
+ * 两数据源各自填好 hour_wx_t 后调用 rain_eval()。
+ */
+#define RAIN_WINDOW_H   6      /* 提醒窗口: 未来 6 小时 */
+#define RAIN_REQ_H      8      /* 请求小时数 (要覆盖窗口 +1) */
+#define RAIN_PROB_MIN   50     /* 概率阈值 % */
+
+typedef struct {
+    bool    precip;     /* 该小时有降水量 */
+    bool    snow;       /* 是雪 */
+    uint8_t prob;       /* 降水概率 % */
+} hour_wx_t;
+
+static void rain_eval(weather_info_t *wx, const hour_wx_t *h, int n) {
+    int first = -1, maxprob = 0;
+    bool snow = false;
+
+    for (int i = 1; i <= RAIN_WINDOW_H && i < n; i++) {
+        if (h[i].prob > maxprob) maxprob = h[i].prob;
+        bool wet = h[i].precip || h[i].prob >= RAIN_PROB_MIN;
+        if (wet && first < 0) {
+            first = i;
+            snow = h[i].snow;
+        }
+    }
+
+    wx->rain_valid = true;
+    wx->rain_in_hours = first > 0 ? (uint8_t)first : 0;
+    wx->rain_prob = (uint8_t)maxprob;
+
+    if (first > 0) {
+        strlcpy(wx->rain_icon, snow ? "\xE2\x9D\x84" : "\xE2\x98\x94", sizeof(wx->rain_icon)); /* ❄ / ☔ */
+        snprintf(wx->rain_text, sizeof(wx->rain_text), "%d小时后有%s (%d%%)",
+                 first, snow ? "雪" : "雨", maxprob);
+        ESP_LOGI(TAG, "rain alert: %s", wx->rain_text);
+    } else {
+        wx->rain_icon[0] = '\0';
+        snprintf(wx->rain_text, sizeof(wx->rain_text), "未来%d小时无降水", RAIN_WINDOW_H);
+    }
+}
+
 /* ── WMO 天气码 (Open-Meteo) ── */
 
 const char *wmo_text(uint8_t code) {
@@ -237,13 +279,14 @@ static bool geocode(const char *city, int32_t *lat, int32_t *lon) {
 /* ── 数据源 1: Open-Meteo ── */
 
 static bool fetch_openmeteo(weather_info_t *wx, int32_t lat, int32_t lon) {
-    char url[288];
+    char url[360];
     snprintf(url, sizeof(url),
              OM_URL "?latitude=%.4f&longitude=%.4f"
              "&current=temperature_2m,relative_humidity_2m,weather_code"
              "&daily=weather_code,temperature_2m_max,temperature_2m_min"
-             "&forecast_days=%d&timezone=Asia%%2FShanghai",
-             lat / 10000.0, lon / 10000.0, WX_DAYS);
+             "&hourly=precipitation_probability,precipitation,weather_code"
+             "&forecast_days=%d&forecast_hours=%d&timezone=Asia%%2FShanghai",
+             lat / 10000.0, lon / 10000.0, WX_DAYS, RAIN_REQ_H);
 
     int n = net_https_get(url, NULL, NULL, NULL, s_buf, sizeof(s_buf));
     if (n <= 0) {
@@ -301,6 +344,33 @@ static bool fetch_openmeteo(weather_info_t *wx, int32_t lat, int32_t lon) {
             ok = true;
         }
     }
+    /* 逐小时: 推算未来几小时降水 */
+    cJSON *hourly = cJSON_GetObjectItem(root, "hourly");
+    if (hourly) {
+        cJSON *probs = cJSON_GetObjectItem(hourly, "precipitation_probability");
+        cJSON *amts  = cJSON_GetObjectItem(hourly, "precipitation");
+        cJSON *codes = cJSON_GetObjectItem(hourly, "weather_code");
+        if (cJSON_IsArray(probs)) {
+            hour_wx_t hrs[RAIN_REQ_H];
+            memset(hrs, 0, sizeof(hrs));
+            int nh = cJSON_GetArraySize(probs);
+            if (nh > RAIN_REQ_H) nh = RAIN_REQ_H;
+            for (int i = 0; i < nh; i++) {
+                cJSON *p = cJSON_GetArrayItem(probs, i);
+                cJSON *a = amts ? cJSON_GetArrayItem(amts, i) : NULL;
+                cJSON *c = codes ? cJSON_GetArrayItem(codes, i) : NULL;
+                if (p && cJSON_IsNumber(p)) hrs[i].prob = (uint8_t)p->valuedouble;
+                if (a && cJSON_IsNumber(a)) hrs[i].precip = (a->valuedouble > 0.05);
+                if (c && cJSON_IsNumber(c)) {
+                    uint8_t code = (uint8_t)c->valuedouble;
+                    hrs[i].snow = (code >= 71 && code <= 77) || code == 85 || code == 86;
+                    if (!hrs[i].precip) hrs[i].precip = (code >= 51);   /* 有天气码即视为降水 */
+                }
+            }
+            rain_eval(wx, hrs, nh);
+        }
+    }
+
     cJSON_Delete(root);
     strlcpy(wx->src, "Open-Meteo", sizeof(wx->src));
     if (!ok) strlcpy(wx->err, "响应缺少数据", sizeof(wx->err));
@@ -400,6 +470,53 @@ static bool fetch_qweather(weather_info_t *wx, const app_config_t *cfg, int32_t 
         }
         ok = true;
     }
+    /* 逐小时预报 → 未来几小时降水提醒 */
+    snprintf(url, sizeof(url), "https://%s/weather/v1/hourly/%.2f/%.2f?hours=%d&lang=zh",
+             cfg->qw_host, lat / 10000.0, lon / 10000.0, RAIN_REQ_H);
+    n = net_https_get_ex(url, NULL, NULL, NULL, cfg->qw_key, s_buf, sizeof(s_buf));
+    if (n > 0) {
+        int dl3 = net_http_body_decode(s_buf, n, s_dec, sizeof(s_dec));
+        if (dl3 > 0) {
+            cJSON *hroot = cJSON_Parse(s_dec);
+            cJSON *hours = hroot ? cJSON_GetObjectItem(hroot, "hours") : NULL;
+            if (cJSON_IsArray(hours)) {
+                hour_wx_t hrs[RAIN_REQ_H];
+                memset(hrs, 0, sizeof(hrs));
+                int nh = cJSON_GetArraySize(hours);
+                if (nh > RAIN_REQ_H) nh = RAIN_REQ_H;
+                for (int i = 0; i < nh; i++) {
+                    cJSON *h = cJSON_GetArrayItem(hours, i);
+                    if (!h) continue;
+                    cJSON *pc = cJSON_GetObjectItem(h, "condition");
+                    cJSON *pr = cJSON_GetObjectItem(h, "precipitation");
+                    if (pr) {
+                        cJSON *prob = cJSON_GetObjectItem(pr, "probability");
+                        cJSON *amt  = cJSON_GetObjectItem(pr, "amount");
+                        cJSON *typ  = cJSON_GetObjectItem(pr, "type");
+                        if (prob && cJSON_IsNumber(prob))
+                            hrs[i].prob = (uint8_t)(prob->valuedouble * 100 + 0.5);
+                        if (amt) {
+                            cJSON *v = cJSON_GetObjectItem(amt, "value");
+                            if (v && cJSON_IsNumber(v)) hrs[i].precip = (v->valuedouble > 0.05);
+                        }
+                        if (typ && typ->valuestring)
+                            hrs[i].snow = (strcmp(typ->valuestring, "snow") == 0);
+                    }
+                    if (pc) {
+                        cJSON *k = cJSON_GetObjectItem(pc, "code");
+                        if (k && k->valuestring) {
+                            int code = atoi(k->valuestring);
+                            if (code >= 400 && code <= 499) hrs[i].snow = true;
+                            if (code >= 300 && !hrs[i].precip) hrs[i].precip = true;
+                        }
+                    }
+                }
+                rain_eval(wx, hrs, nh);
+            }
+            if (hroot) cJSON_Delete(hroot);
+        }
+    }
+
     cJSON_Delete(root);
     strlcpy(wx->src, "和风天气", sizeof(wx->src));
     if (!ok) strlcpy(wx->err, "和风: 无预报数据", sizeof(wx->err));
