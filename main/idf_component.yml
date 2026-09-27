@@ -4,3 +4,5 @@ dependencies:
     version: '>=5.0'
   espressif/esp_lvgl_port: ^2
   lvgl/lvgl: ^9
+  # 注意: JPEG 解码用 esp_new_jpeg, 但它带**预编译 .a** —— 托管组件在中文路径下
+  # ld.exe 打不开 (D:/ESP/监控/...), 所以已收编为本地组件 components/esp_new_jpeg/

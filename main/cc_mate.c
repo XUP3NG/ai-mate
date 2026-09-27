@@ -283,7 +283,7 @@ static void net_task(void *arg) {
         }
 
         /* AI 每日像素画: 一天一次, 自己内部判断 (时间未同步/今天已生成都会直接返回) */
-        art_poll(&s_state, &s_cfg);
+        art_poll(&s_state);
 
         /* 时间未同步 (SNTP 未完成): 再等最多 10s 并补查一次, 保证消费历史有日期 */
         if (!s_state.time_valid) {
@@ -394,7 +394,7 @@ void app_main(void)
     net_query_init_time();
     bat_full_load(&s_cfg);           /* 满电电压参考: 配置值或上次学到的 */
     net_hist_sync(&s_state);         /* 先把 NVS 历史读出来, 柱状图开机即有数据 */
-    art_init(&s_state);              /* 昨天的像素画 (有就先显示) */
+    art_init(&s_state);              /* 上次的图 (有就先显示) */
     wifi_mgr_connect_best(&s_cfg);   /* 扫描并连接信号最好的已保存网络 */
 
     xTaskCreatePinnedToCore(net_task, "net", 12288, NULL, 5, NULL, 1);

@@ -421,8 +421,8 @@ void ui_init(ui_elements_t *ui) {
         lv_label_set_text(t6, "长按 BOOT 键 3 秒可重新配网");
     }
 
-    /* ════ Page 4: AI 每日像素画 ════
-     * 80×60 点阵 → 4×4 块放大 = 320×240 (PSRAM RGB565 画布, 150KB) */
+    /* ════ Page 4: 每日一图 (Bing 壁纸, 1-bit 抖动) ════
+     * 图 400×248 原尺寸直出 (不做缩放), 底部一行标题 */
     ui->page_art = lv_obj_create(scr);
     lv_obj_set_size(ui->page_art, DISPLAY_WIDTH, DISPLAY_HEIGHT - 24);
     lv_obj_set_pos(ui->page_art, 0, 24);
@@ -433,21 +433,17 @@ void ui_init(ui_elements_t *ui) {
     lv_obj_remove_flag(ui->page_art, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(ui->page_art, LV_OBJ_FLAG_HIDDEN);
 
-    ui->art_buf = heap_caps_malloc(320 * 240 * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    ui->art_buf = heap_caps_malloc(ART_W * ART_H * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
     if (ui->art_buf) {
-        memset(ui->art_buf, 0xFF, 320 * 240 * sizeof(uint16_t));   /* 先铺白, 别显示随机数据 */
+        memset(ui->art_buf, 0xFF, ART_W * ART_H * sizeof(uint16_t));   /* 先铺白 */
         ui->art_canvas = lv_canvas_create(ui->page_art);
-        lv_canvas_set_buffer(ui->art_canvas, ui->art_buf, 320, 240, LV_COLOR_FORMAT_RGB565);
-        lv_obj_set_pos(ui->art_canvas, 40, 8);
+        lv_canvas_set_buffer(ui->art_canvas, ui->art_buf, ART_W, ART_H, LV_COLOR_FORMAT_RGB565);
+        lv_obj_set_pos(ui->art_canvas, 0, 4);
     }
 
-    ui->art_title = label(ui->page_art, 40, 254, 320);
+    ui->art_title = label(ui->page_art, 8, 256, 384);
     lv_obj_set_style_text_align(ui->art_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(ui->art_title, LV_LABEL_LONG_DOT);
-
-    ui->art_hint = label(ui->page_art, 40, 130, 320);
-    lv_obj_set_style_text_align(ui->art_hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(ui->art_hint, "");
 }
 
 /* ── 格式化 ── */
@@ -851,34 +847,28 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
         }
     }
 
-    /* ── 像素画页 ── */
+    /* ── 每日一图页 ── */
     if (ui->art_buf) {
-        /* 版本号变了才重绘 40×30 → 320×240 (8×8 块) */
+        /* 位图版本变了才重绘: 1-bit → RGB565 纯黑白, 1:1 原尺寸 */
         static int s_art_rev = -1;
         if (s_art_rev != art_rev()) {
             s_art_rev = art_rev();
             const uint8_t *px = art_bitmap();
             uint16_t *dst = (uint16_t *)ui->art_buf;
-            for (int r = 0; r < 30; r++) {
-                for (int c = 0; c < 40; c++) {
-                    uint16_t col = (px[r * 5 + (c >> 3)] & (0x80 >> (c & 7))) ? 0x0000 : 0xFFFF;
-                    for (int y = 0; y < 8; y++) {
-                        uint16_t *row = dst + (r * 8 + y) * 320 + c * 8;
-                        for (int x = 0; x < 8; x++) row[x] = col;
-                    }
-                }
+            int arow = ART_W / 8;
+            for (int y = 0; y < ART_H; y++) {
+                const uint8_t *srow = px + y * arow;
+                uint16_t *drow = dst + y * ART_W;
+                for (int x = 0; x < ART_W; x++)
+                    drow[x] = (srow[x >> 3] & (0x80 >> (x & 7))) ? 0x0000 : 0xFFFF;
             }
             lv_obj_invalidate(ui->art_canvas);
         }
-        if (s->art.valid) {
-            snprintf(b, sizeof(b), "%s · DeepSeek 每日生成", s->art.title);
-            lv_label_set_text(ui->art_title, b);
-            lv_label_set_text(ui->art_hint, "");
-        } else {
-            lv_label_set_text(ui->art_title, "");
-            lv_label_set_text(ui->art_hint,
-                s->art.generating ? "今日像素画生成中… 约 1 分钟" : "等待网络生成今日像素画");
-        }
+        if (s->art.valid)
+            snprintf(b, sizeof(b), "%s · Bing 每日壁纸", s->art.title);
+        else
+            snprintf(b, sizeof(b), "%s", s->art.generating ? "正在获取今日壁纸…" : "等待网络获取今日壁纸");
+        lv_label_set_text(ui->art_title, b);
     }
 }
 

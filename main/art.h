@@ -1,37 +1,44 @@
 /**
- * art — AI 每日像素画 (DeepSeek 生成)
+ * art — 每日一图 (Bing 每日壁纸 → 1-bit 全屏抖动)
  *
- * 每天 (UTC 日) 让 DeepSeek 生成一幅 40×30 的 1-bit 点阵画:
- *   prompt 里带日期/星期/天气 + 具体题材候选 + 密度约束 → 输出 '#'/'.' 字符画
- *   UI 以 8×8 块放大到 320×240 显示 (块状像素正是像素画的味道)
+ * 每天 (UTC 日) 从 Bing 拉当天壁纸, 在设备端解码 + 二值化, 全屏显示在 Page 4。
  *
- * 画布刻意取小: 文本模型对大画布的空间控制力很差, 80×60 出来全是抽象色块,
- * 40×30 才画得出可辨认的剪影。
+ *   1. GET https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN
+ *      → images[0].urlbase / title
+ *   2. GET https://www.bing.com{urlbase}_1920x1080.jpg&w=400&h=248&rs=1&c=4&pid=hp
+ *      Bing 服务端直接裁成 400×248, 只有 **20KB** (原图 340KB) —— 省流量也省解码
+ *   3. esp_new_jpeg 解码 → RGB565 → 亮度
+ *   4. 自动色阶(10%/90% 分位) + 平坦区保护抖动 → 1-bit
+ *   5. 存到 storage 分区 (裸分区, 非文件系统), 开机直接读回
  *
- * 成本: 每天一次, 输出约 1200 字符 ≈ 1K token, 几分钱。
- * 失败重试: 同一天最多 3 次 (计数按"日+prompt版本"持久化, 防重启后重复扣费)。
- * 存储: NVS ai_art — day/ver(已成功) tryd/tryv/try(当日尝试) title px(150B 位图)
+ * 为什么不用 LLM 画: 文本模型是"盲画"的(逐字符输出无法回看), 40×30 已是极限,
+ * 而这块屏有 400×248; 用真照片 + 抖动反而信息量最大。
+ *
+ * 成本: 0 元 (无需 API Key), 每天 20KB 流量。
  */
 
 #pragma once
 
 #include "cc_mate.h"
-#include "config_store.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* 开机加载: NVS 里昨天的画 + 状态; 画在时 UI 立刻可显示 */
+/* 画布: 页面可用区 400×276, 图占上部 248, 底下留给标题行 */
+#define ART_W 400
+#define ART_H 248
+
+/* 开机加载: 从 storage 分区读回上次的图 (有则立即可显示) */
 void art_init(app_state_t *st);
 
-/* net_task 每轮调用: 时间已同步且今天还没画 → 生成 (阻塞可达 1~2 分钟) */
-void art_poll(app_state_t *st, const app_config_t *cfg);
+/* net_task 每轮调用: 时间已同步且今天还没取图 → 拉取 (阻塞数秒) */
+void art_poll(app_state_t *st);
 
-/* 40×30 位图, 行主序 MSB-first, 行 5 字节共 150 字节 (UI 放大用) */
+/* 1-bit 位图, 行主序 MSB-first, 每行 ART_W/8 = 50 字节, 共 12400 字节 */
 const uint8_t *art_bitmap(void);
 
-/* 画布版本号: 每次有新画 +1, UI 据此判断是否需要重绘 */
+/* 画布版本号: 每次有新图 +1, UI 据此判断是否需要重绘 */
 int art_rev(void);
 
 #ifdef __cplusplus

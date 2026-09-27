@@ -1,5 +1,5 @@
 /**
- * art — AI 每日像素画实现, 见 art.h
+ * art — 每日一图实现 (Bing 壁纸 → JPEG 解码 → 自动色阶 + 抖动 → 1-bit), 见 art.h
  */
 
 #include "art.h"
@@ -8,286 +8,341 @@
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
+#include "esp_partition.h"
+#include "esp_jpeg_dec.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <time.h>
 
 static const char *TAG = "art";
 
+#define ART_W_PX       ART_W
+#define ART_H_PX       ART_H
+#define AROW           (ART_W_PX / 8)              /* 50 字节/行 */
+#define ABYTES         (AROW * ART_H_PX)           /* 12400 */
+
 #define ART_NS         "ai_art"
-#define ART_W          40
-#define ART_H          30
-#define ART_ROW_BYTES  (ART_W / 8)          /* 5 */
-#define ART_BYTES      (ART_ROW_BYTES * ART_H)   /* 150 */
+#define ART_PART_LABEL "storage"                   /* 1MB 裸分区, 原用于 SPIFFS, 本项目未用 */
+#define JPG_CAP        (192 * 1024)                /* 原始/解压后的 JPEG (实测 20KB) */
+#define RGB_CAP        (ART_W_PX * ART_H_PX * 2)   /* RGB565: 198400 */
+#define LUM_CAP        (ART_W_PX * ART_H_PX * 2)   /* int16 亮度: 198400 */
+#define ART_PROMPT_VER 6                           /* 渲染算法版本: 变了重取一次 */
+#define MAX_TRIES_PER_DAY 3
 
-#define DSK_CHAT_URL   "https://api.deepseek.com/chat/completions"
-#define MAX_TRIES_PER_DAY  3
-/* prompt 版本: 改画法/尺寸时 +1 → 已存的老画自动作废重画一次 (之后恢复每日一次) */
-#define ART_PROMPT_VER     2
+#define BING_JSON_URL  "https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN"
 
-static char    s_rx[16384];                 /* HTTP 响应 (含 JSON 转义) */
-static uint8_t s_px[ART_BYTES];
-static int32_t s_day = -1;                  /* 已成功生成的 UTC 日 */
-static int32_t s_try_day = -1;
-static int32_t s_try_ver = -1;              /* 计数对应的 prompt 版本 */
-static uint8_t s_tries = 0;
-static int32_t s_ver = 0;                   /* 已存画的 prompt 版本 */
-static int     s_rev = 1;
+/* ── 分区里的持久化格式 ── */
+typedef struct __attribute__((packed)) {
+    uint32_t magic;                    /* 'AIMG' */
+    int32_t  day;                      /* UTC 日 */
+    int32_t  ver;                      /* 渲染算法版本 */
+    char     title[40];
+    uint32_t crc;                      /* 位图校验 (字节和) */
+} art_hdr_t;
+#define ART_MAGIC 0x474D4941u          /* "AIMG" (小端) */
 
-const uint8_t *art_bitmap(void) { return s_px; }
+static uint8_t  s_bits[ABYTES];
+static char     s_title[40];
+static int32_t  s_day = -1, s_try_day = -1, s_try_ver = -1, s_ver = 0;
+static uint8_t  s_tries = 0;
+static int      s_rev = 1;
+
+static uint8_t *s_jpg;                 /* PSRAM: 下载的 JPEG */
+static uint8_t *s_rgb;                 /* PSRAM: 解码后的 RGB565 */
+static int16_t *s_lum;                 /* PSRAM: 亮度工作缓冲 (抖动就地修改) */
+
+const uint8_t *art_bitmap(void) { return s_bits; }
 int art_rev(void) { return s_rev; }
 
-/* ── NVS ── */
+/* ══════════ 分区读写 (裸分区, 不用文件系统) ══════════ */
+
+static const esp_partition_t *art_part(void) {
+    static const esp_partition_t *p = NULL;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        p = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS,
+                                     ART_PART_LABEL);
+        if (!p) ESP_LOGW(TAG, "找不到分区 %s, 图无法持久化", ART_PART_LABEL);
+    }
+    return p;
+}
+
+static void art_store(int32_t day, const char *title) {
+    const esp_partition_t *p = art_part();
+    if (!p) return;
+    art_hdr_t h = { .magic = ART_MAGIC, .day = day, .ver = ART_PROMPT_VER, .crc = 0 };
+    strlcpy(h.title, title, sizeof(h.title));
+    for (int i = 0; i < ABYTES; i++) h.crc += s_bits[i];
+
+    /* 需要按扇区擦除: 头 + 位图 ≈ 12.5KB → 擦 16KB */
+    uint32_t need = sizeof(h) + ABYTES;
+    esp_err_t e = esp_partition_erase_range(p, 0, 0x4000);
+    if (e != ESP_OK) { ESP_LOGW(TAG, "擦除失败 %s", esp_err_to_name(e)); return; }
+    e = esp_partition_write(p, 0, &h, sizeof(h));
+    if (e == ESP_OK) e = esp_partition_write(p, sizeof(h), s_bits, ABYTES);
+    if (e != ESP_OK) ESP_LOGW(TAG, "写分区失败 %s", esp_err_to_name(e));
+    else             ESP_LOGI(TAG, "已存图到分区 (%u 字节)", (unsigned)need);
+}
+
+static bool art_load_stored(app_state_t *st) {
+    const esp_partition_t *p = art_part();
+    if (!p) return false;
+    art_hdr_t h;
+    if (esp_partition_read(p, 0, &h, sizeof(h)) != ESP_OK) return false;
+    if (h.magic != ART_MAGIC) return false;
+    if (esp_partition_read(p, sizeof(h), s_bits, ABYTES) != ESP_OK) return false;
+
+    uint32_t crc = 0;
+    for (int i = 0; i < ABYTES; i++) crc += s_bits[i];
+    if (crc != h.crc) { ESP_LOGW(TAG, "分区里的位图校验失败"); return false; }
+
+    strlcpy(s_title, h.title[0] ? h.title : "每日一图", sizeof(s_title));
+    strlcpy(st->art.title, s_title, sizeof(st->art.title));
+    st->art.valid = true;
+    ESP_LOGI(TAG, "已读回上次的图 \"%s\" (day=%ld ver=%ld)", s_title, (long)h.day, (long)h.ver);
+    return true;
+}
+
+/* ══════════ 抖动 ══════════
+ * 自动色阶 + 平坦区保护: 直接上 Floyd–Steinberg 会在大片暗部/亮部长满麻点,
+ * 而固定阈值又会把暗调照片整幅变黑 —— 必须按画面直方图定黑白场,
+ * 再让"大面积纯色区"直接定死, 只对中间调抖动。
+ */
+
+#define FLAT_LO 45     /* 拉伸后 <= 此值直接黑 */
+#define FLAT_HI 210    /* 拉伸后 >= 此值直接白 */
+
+static void art_dither(void) {
+    /* 1. 直方图 → 10%/90% 分位当黑白场 */
+    int hist[256];
+    memset(hist, 0, sizeof(hist));
+    int total = ART_W_PX * ART_H_PX;
+    for (int i = 0; i < total; i++) {
+        int v = s_lum[i];
+        hist[v < 0 ? 0 : (v > 255 ? 255 : v)]++;
+    }
+    int lo = 0, hi = 255, acc = 0;
+    for (int i = 0; i < 256; i++) { acc += hist[i]; if (acc >= total / 10) { lo = i; break; } }
+    acc = 0;
+    for (int i = 0; i < 256; i++) { acc += hist[i]; if (acc >= total * 9 / 10) { hi = i; break; } }
+    if (hi - lo < 40) { hi = lo + 40; if (hi > 255) { hi = 255; lo = hi - 40; } }
+    int span = hi - lo;
+    if (span < 1) span = 1;
+
+    /* 2. 拉伸 + 抖动 (误差以拉伸前的尺度回灌) */
+    memset(s_bits, 0, sizeof(s_bits));
+    for (int y = 0; y < ART_H_PX; y++) {
+        for (int x = 0; x < ART_W_PX; x++) {
+            int idx = y * ART_W_PX + x;
+            int v = (s_lum[idx] - lo) * 255 / span;
+            if (v < 0) v = 0;
+            if (v > 255) v = 255;
+
+            /* on = 1 表示"白"(不着墨)。位图里 bit=1 表示**黑**, 所以下面取反。
+             * (这里踩过坑: 最初写成 if (on) 置位, 结果整幅图黑白反相) */
+            int on;
+            long err = 0;
+            if (v <= FLAT_LO)      { on = 0; }
+            else if (v >= FLAT_HI) { on = 1; }
+            else {
+                int t = (v - FLAT_LO) * 255 / (FLAT_HI - FLAT_LO);   /* 中间调再拉伸 */
+                on = (t >= 128);
+                err = (long)(t - (on ? 255 : 0)) * (FLAT_HI - FLAT_LO) / 255 * span / 255;
+            }
+            if (!on) s_bits[y * AROW + (x >> 3)] |= (uint8_t)(0x80 >> (x & 7));
+
+            if (err) {
+                if (x + 1 < ART_W_PX) {
+                    s_lum[idx + 1] += (int16_t)(err * 7 / 16);
+                }
+                if (y + 1 < ART_H_PX) {
+                    if (x > 0)             s_lum[idx + ART_W_PX - 1] += (int16_t)(err * 3 / 16);
+                    s_lum[idx + ART_W_PX]     += (int16_t)(err * 5 / 16);
+                    if (x + 1 < ART_W_PX)  s_lum[idx + ART_W_PX + 1] += (int16_t)(err * 1 / 16);
+                }
+            }
+        }
+    }
+    ESP_LOGI(TAG, "抖动完成: 黑白场 %d..%d", lo, hi);
+}
+
+/* 串口预览: 8 行 × 4 列统计墨点密度 → 灰阶字符
+ * (抖动图的墨点近乎均匀分布, OR 降采样会糊成一片 '#', 必须按密度映射) */
+static void art_preview(const char *title) {
+    static const char *RAMP = " .:-=+*#%@";     /* 10 级 */
+    char line[ART_W_PX / 4 + 1];
+    ESP_LOGI(TAG, "── \"%s\" ──", title);
+    for (int r = 0; r < ART_H_PX; r += 8) {
+        for (int c = 0; c < ART_W_PX; c += 4) {
+            int ink = 0;
+            for (int dy = 0; dy < 8; dy++)
+                for (int dx = 0; dx < 4; dx++) {
+                    int y = r + dy, x = c + dx;
+                    if (y < ART_H_PX && (s_bits[y * AROW + (x >> 3)] >> (7 - (x & 7))) & 1) ink++;
+                }
+            int lv = ink * 9 / 32;              /* 0..9 */
+            line[c / 4] = RAMP[lv];
+        }
+        line[ART_W_PX / 4] = '\0';
+        ESP_LOGI(TAG, "|%s|", line);
+    }
+}
+
+/* ══════════ 拉取 + 解码 ══════════ */
+
+static bool art_fetch(app_state_t *st) {
+    /* 1. 拿今天的 urlbase 与标题 */
+    static char json[3072];
+    int n = net_https_get(BING_JSON_URL, NULL, NULL, NULL, json, sizeof(json));
+    if (n <= 0) { ESP_LOGW(TAG, "bing json 请求失败 %d", n); return false; }
+
+    static char jtxt[3072];
+    int jl = net_http_body_decode(json, n, jtxt, sizeof(jtxt));
+    if (jl <= 0) { ESP_LOGW(TAG, "bing json 解码失败"); return false; }
+
+    cJSON *root = cJSON_Parse(jtxt);
+    if (!root) { ESP_LOGW(TAG, "bing json 解析失败: %.120s", jtxt); return false; }
+    cJSON *imgs = cJSON_GetObjectItem(root, "images");
+    cJSON *im0  = cJSON_IsArray(imgs) ? cJSON_GetArrayItem(imgs, 0) : NULL;
+    cJSON *jub  = im0 ? cJSON_GetObjectItem(im0, "urlbase") : NULL;
+    cJSON *jti  = im0 ? cJSON_GetObjectItem(im0, "title") : NULL;
+    char urlbase[192] = "", title[40] = "";
+    if (jub && jub->valuestring) strlcpy(urlbase, jub->valuestring, sizeof(urlbase));
+    if (jti && jti->valuestring) strlcpy(title, jti->valuestring, sizeof(title));
+    cJSON_Delete(root);
+    if (!urlbase[0]) { ESP_LOGW(TAG, "bing json 里没有 urlbase"); return false; }
+    if (!title[0]) strlcpy(title, "每日一图", sizeof(title));
+
+    /* 2. 让 Bing 服务端直接裁成 400×248 (原图 340KB → 20KB) */
+    char url[384];
+    snprintf(url, sizeof(url),
+             "https://www.bing.com%s_1920x1080.jpg&w=%d&h=%d&rs=1&c=4&pid=hp",
+             urlbase, ART_W_PX, ART_H_PX);
+
+    n = net_https_get(url, NULL, NULL, NULL, (char *)s_jpg, JPG_CAP);
+    if (n <= 0) { ESP_LOGW(TAG, "壁纸下载失败 %d", n); return false; }
+    ESP_LOGI(TAG, "壁纸 %d 字节 (%.1fKB), \"%s\"", n, n / 1024.0, title);
+
+    /* 3. 解码 (Bing 可能无视 identity 回 gzip, 先解容器) */
+    int dl = net_http_body_decode((char *)s_jpg, n, (char *)s_jpg, JPG_CAP);
+    if (dl <= 0) { ESP_LOGW(TAG, "壁纸解压失败"); return false; }
+    if (!(s_jpg[0] == 0xFF && s_jpg[1] == 0xD8)) {
+        ESP_LOGW(TAG, "不是 JPEG (magic %02X %02X)", s_jpg[0], s_jpg[1]);
+        return false;
+    }
+
+    jpeg_dec_config_t cfg = DEFAULT_JPEG_DEC_CONFIG();
+    cfg.output_type = JPEG_PIXEL_FORMAT_RGB565_LE;
+    jpeg_dec_handle_t dec = NULL;
+    if (jpeg_dec_open(&cfg, &dec) != JPEG_ERR_OK) { ESP_LOGW(TAG, "jpeg_dec_open 失败"); return false; }
+
+    jpeg_dec_io_t io;
+    memset(&io, 0, sizeof(io));
+    io.inbuf = s_jpg;
+    io.inbuf_len = dl;
+    jpeg_dec_header_info_t info;
+    if (jpeg_dec_parse_header(dec, &io, &info) != JPEG_ERR_OK) {
+        ESP_LOGW(TAG, "JPEG 头解析失败"); jpeg_dec_close(dec); return false;
+    }
+    int outlen = 0;
+    jpeg_dec_get_outbuf_len(dec, &outlen);
+    ESP_LOGI(TAG, "JPEG %dx%d → 输出 %d 字节", info.width, info.height, outlen);
+    if (outlen <= 0 || outlen > RGB_CAP || info.width != ART_W_PX || info.height != ART_H_PX) {
+        ESP_LOGW(TAG, "尺寸不符 (期望 %dx%d)", ART_W_PX, ART_H_PX);
+        jpeg_dec_close(dec);
+        return false;
+    }
+    io.outbuf = s_rgb;
+    io.out_size = outlen;
+    if (jpeg_dec_process(dec, &io) != JPEG_ERR_OK) {
+        ESP_LOGW(TAG, "JPEG 解码失败"); jpeg_dec_close(dec); return false;
+    }
+    jpeg_dec_close(dec);
+
+    /* 4. RGB565 → 亮度 */
+    for (int i = 0; i < ART_W_PX * ART_H_PX; i++) {
+        uint16_t p = (uint16_t)(s_rgb[i * 2] | (s_rgb[i * 2 + 1] << 8));
+        int r = (p >> 11) & 0x1F, g = (p >> 5) & 0x3F, b = p & 0x1F;
+        r = (r << 3) | (r >> 2); g = (g << 2) | (g >> 4); b = (b << 3) | (b >> 2);
+        s_lum[i] = (int16_t)((r * 77 + g * 150 + b * 29) >> 8);
+    }
+
+    /* 5. 抖动 + 落盘 */
+    art_dither();
+    strlcpy(s_title, title, sizeof(s_title));
+    strlcpy(st->art.title, title, sizeof(st->art.title));
+    art_store((int32_t)(time(NULL) / 86400), title);
+    s_rev++;
+    art_preview(title);
+    return true;
+}
+
+/* ══════════ 外部接口 ══════════ */
 
 void art_init(app_state_t *st) {
     nvs_handle_t h;
     if (nvs_open(ART_NS, NVS_READONLY, &h) == ESP_OK) {
-        uint8_t blob[ART_BYTES];
-        size_t sz = sizeof(blob);
-        if (nvs_get_blob(h, "px", blob, &sz) == ESP_OK && sz == ART_BYTES) {
-            memcpy(s_px, blob, ART_BYTES);
-            st->art.valid = true;
-        }
         nvs_get_i32(h, "day", &s_day);
         nvs_get_i32(h, "tryd", &s_try_day);
         nvs_get_i32(h, "tryv", &s_try_ver);
         nvs_get_u8(h, "try", &s_tries);
         nvs_get_i32(h, "ver", &s_ver);
-        size_t ts = sizeof(st->art.title);
-        if (nvs_get_str(h, "title", st->art.title, &ts) != ESP_OK || !st->art.title[0])
-            strlcpy(st->art.title, "像素画", sizeof(st->art.title));
         nvs_close(h);
     }
+
+    /* PSRAM 缓冲 (16 字节对齐: JPEG 输出要求) */
+    s_jpg = heap_caps_aligned_alloc(16, JPG_CAP, MALLOC_CAP_SPIRAM);
+    s_rgb = heap_caps_aligned_alloc(16, RGB_CAP, MALLOC_CAP_SPIRAM);
+    s_lum = heap_caps_aligned_alloc(16, LUM_CAP, MALLOC_CAP_SPIRAM);
+    if (!s_jpg || !s_rgb || !s_lum) {
+        ESP_LOGE(TAG, "PSRAM 分配失败 (jpg=%p rgb=%p lum=%p)", s_jpg, s_rgb, s_lum);
+        s_jpg = s_rgb = NULL; s_lum = NULL;
+        return;
+    }
+
+    art_load_stored(st);
     ESP_LOGI(TAG, "art: %s (done_day=%ld ver=%ld/%d)", st->art.valid ? "loaded" : "empty",
              (long)s_day, (long)s_ver, ART_PROMPT_VER);
 }
 
-static void art_save(int32_t day, const char *title) {
-    nvs_handle_t h;
-    if (nvs_open(ART_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_blob(h, "px", s_px, ART_BYTES);
-    nvs_set_str(h, "title", title);
-    nvs_set_i32(h, "day", day);
-    nvs_set_i32(h, "tryd", day);
-    nvs_set_i32(h, "tryv", ART_PROMPT_VER);
-    nvs_set_i32(h, "ver", ART_PROMPT_VER);
-    nvs_set_u8(h, "try", 0);
-    nvs_commit(h);
-    nvs_close(h);
-}
-
-/* ── 解析模型输出: "标题：xx" + 若干行只含 # 和 . 的画布 ── */
-
-static bool art_parse(const char *content, char *title, size_t tsz) {
-    static uint8_t rows[ART_H][ART_W];      /* static: 4.8KB 别放栈上 */
-    memset(rows, 0, sizeof(rows));
-    int nr = 0;
-    title[0] = '\0';
-
-    const char *p = content;
-    while (*p && nr < ART_H) {
-        const char *e = strchr(p, '\n');
-        size_t len = e ? (size_t)(e - p) : strlen(p);
-        const char *line_end = e ? e : p + len;
-
-        /* 标题行: "标题：xxx" (中文或 ASCII 冒号) */
-        if (!title[0] && len > 8 && strncmp(p, "标题", 6) == 0) {
-            const char *colon = NULL; int cskip = 1;
-            for (const char *q = p; q < line_end; q++)
-                if (*q == ':') { colon = q; break; }
-            for (const char *q = p; q + 2 < line_end; q++)
-                if ((uint8_t)q[0] == 0xEF && (uint8_t)q[1] == 0xBC && (uint8_t)q[2] == 0x9A) {
-                    colon = q; cskip = 3; break;    /* 中文冒号 UTF-8 */
-                }
-            if (colon) {
-                colon += cskip;
-                size_t n = (size_t)(line_end - colon);
-                while (n > 0 && (colon[n-1] == '\r' || colon[n-1] == ' ')) n--;
-                if (n >= tsz) n = tsz - 1;
-                memcpy(title, colon, n);
-                title[n] = '\0';
-            }
-            if (!e) break;
-            p = e + 1;
-            continue;
-        }
-
-        /* 画布行: 只含 # 和 . */
-        bool canvas = (len >= ART_W / 2);
-        for (size_t i = 0; i < len && canvas; i++)
-            if (p[i] != '#' && p[i] != '.') canvas = false;
-        if (canvas) {
-            size_t n = len > ART_W ? ART_W : len;
-            for (size_t i = 0; i < ART_W; i++)
-                rows[nr][i] = (i < n && p[i] == '#') ? 1 : 0;
-            nr++;
-        }
-        if (!e) break;
-        p = e + 1;
-    }
-
-    if (nr < ART_H / 2) {
-        ESP_LOGW(TAG, "parse: 画布行数不足 (%d 行)", nr);
-        return false;
-    }
-    if (!title[0]) strlcpy(title, "无题", tsz);
-
-    /* 垂直居中后打包成位图 */
-    memset(s_px, 0, sizeof(s_px));
-    int off = (ART_H - nr) / 2;
-    for (int r = 0; r < nr; r++)
-        for (int x = 0; x < ART_W; x++)
-            if (rows[r][x])
-                s_px[(r + off) * ART_ROW_BYTES + (x >> 3)] |= (uint8_t)(0x80 >> (x & 7));
-
-    /* 黑点占比 sanity: 全黑或全白都判失败 (模型抽风) */
-    int ink = 0;
-    for (int i = 0; i < ART_BYTES; i++)
-        for (int b = 0; b < 8; b++) ink += (s_px[i] >> b) & 1;
-    if (ink < ART_W * ART_H / 25 || ink > ART_W * ART_H * 45 / 100) {
-        ESP_LOGW(TAG, "parse: 黑点占比异常 %d/%d", ink, ART_W * ART_H);
-        return false;
-    }
-    return true;
-}
-
-/* 把成品打到串口日志 (逐行 ASCII) —— 不看屏幕也能判断画得像不像 */
-static void art_preview(const char *title) {
-    char line[ART_W + 1];
-    ESP_LOGI(TAG, "── \"%s\" ──", title);
-    for (int r = 0; r < ART_H; r++) {
-        for (int c = 0; c < ART_W; c++)
-            line[c] = (s_px[r * ART_ROW_BYTES + (c >> 3)] & (0x80 >> (c & 7))) ? '#' : '.';
-        line[ART_W] = '\0';
-        ESP_LOGI(TAG, "|%s|", line);
-    }
-}
-
-/* ── 生成 ── */
-
-static bool art_generate(app_state_t *st, const app_config_t *cfg) {
-    char prompt[1400];
+void art_poll(app_state_t *st) {
+    if (st->art.generating || !s_jpg) return;
     time_t t = time(NULL);
-    struct tm tm;
-    localtime_r(&t, &tm);
-    static const char *WD[] = {"日","一","二","三","四","五","六"};
-    char wxline[64] = "天气未知";
-    if (st->wx.valid)
-        snprintf(wxline, sizeof(wxline), "天气%s 气温%d度", st->wx.text, st->wx.temp_x10 / 10);
-
-    /* 关键: 让模型画**一个具体实物**并明确给密度约束。
-     * 早先版本只说"自由联想 + 剪影风", 结果出来全是抽象色块 —— 文本模型对
-     * 大画布(80×60)的空间控制力很差, 格子越少越画得像。 */
-    snprintf(prompt, sizeof(prompt),
-        "你是像素艺术家, 为黑白点阵屏作画。画布 %d 列 × %d 行, '#'=黑, '.'=白。\n"
-        "严格遵守:\n"
-        "1. 第一行只输出: 标题：xxx (4个汉字以内, 就是画的是什么)\n"
-        "2. 然后输出恰好 %d 行, 每行恰好 %d 个字符, 只能含 '#' 和 '.', 用 ``` 围起来\n"
-        "3. 画一个**具体可辨认的实物**, 一眼就能看出是什么; 不要抽象图案、几何色块、随机噪点\n"
-        "4. 主体占画面 60%%~80%%, 居中, 四周留白; 黑色像素占总量的 15%%~35%%\n"
-        "5. 不加边框、不写文字、不签名\n"
-        "候选题材(选一个, 也可另选别的具体实物, 优先贴合今天天气/季节):\n"
-        "猫 狗 灯塔 帆船 鲸鱼 蘑菇 仙人掌 自行车 咖啡杯 老式相机 台灯 飞鸟\n"
-        "山峰与月亮 小屋 雨伞 吉他 热气球 金鱼 树叶 雪人 机器人 火箭 企鹅\n"
-        "示例(只示范线条密度与留白, 不要照抄, 真实输出必须 %d 行 × %d 字符):\n"
-        "标题：帆船\n"
-        ".........#.........\n"
-        "........###........\n"
-        ".......#####.......\n"
-        "......#######......\n"
-        ".....#########.....\n"
-        ".........#.........\n"
-        ".........#.........\n"
-        "今天是%d月%d日 星期%s, %s。请选择题材并创作。",
-        ART_W, ART_H, ART_H, ART_W, ART_H, ART_W,
-        tm.tm_mon + 1, tm.tm_mday, WD[tm.tm_wday], wxline);
-
-    /* JSON 请求体 */
-    static char body[3072];
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "model", "deepseek-chat");
-    cJSON_AddNumberToObject(root, "max_tokens", 2500);
-    cJSON_AddNumberToObject(root, "temperature", 0.9);
-    cJSON *msgs = cJSON_AddArrayToObject(root, "messages");
-    cJSON *m = cJSON_CreateObject();
-    cJSON_AddStringToObject(m, "role", "user");
-    cJSON_AddStringToObject(m, "content", prompt);
-    cJSON_AddItemToArray(msgs, m);
-    bool printed = cJSON_PrintPreallocated(root, body, sizeof(body) - 1, false);
-    cJSON_Delete(root);
-    if (!printed) return false;
-
-    char auth[112];
-    snprintf(auth, sizeof(auth), "Bearer %s", cfg->dsk_key);
-
-    uint32_t t0 = (uint32_t)(esp_timer_get_time() / 1000);
-    int n = net_https_post_json(DSK_CHAT_URL, body, auth, 150000, s_rx, sizeof(s_rx));
-    if (n <= 0) {
-        ESP_LOGW(TAG, "POST failed: %d", n);
-        return false;
-    }
-
-    cJSON *resp = cJSON_Parse(s_rx);
-    if (!resp) {
-        ESP_LOGW(TAG, "resp JSON 解析失败 [%d]: %.160s", n, s_rx);
-        return false;
-    }
-    cJSON *ch  = cJSON_GetObjectItem(resp, "choices");
-    cJSON *c0  = cJSON_IsArray(ch) ? cJSON_GetArrayItem(ch, 0) : NULL;
-    cJSON *msg = c0 ? cJSON_GetObjectItem(c0, "message") : NULL;
-    cJSON *ct  = msg ? cJSON_GetObjectItem(msg, "content") : NULL;
-
-    bool ok = false;
-    char title[24] = "";
-    if (ct && ct->valuestring) {
-        ok = art_parse(ct->valuestring, title, sizeof(title));
-    } else {
-        ESP_LOGW(TAG, "无 content [%d]: %.200s", n, s_rx);
-    }
-    cJSON_Delete(resp);
-
-    uint32_t ms = (uint32_t)(esp_timer_get_time() / 1000) - t0;
-    if (ok) {
-        strlcpy(st->art.title, title, sizeof(st->art.title));
-        art_save((int32_t)(t / 86400), st->art.title);
-        s_ver = ART_PROMPT_VER;
-        s_rev++;
-        art_preview(st->art.title);
-        ESP_LOGI(TAG, "new art \"%s\" (%u ms)", st->art.title, ms);
-    } else {
-        ESP_LOGW(TAG, "generate/parse failed (%u ms)", ms);
-    }
-    return ok;
-}
-
-void art_poll(app_state_t *st, const app_config_t *cfg) {
-    if (st->art.generating) return;
-    time_t t = time(NULL);
-    if (t < 1700000000) return;                  /* 时间未同步, 无法判定"今天" */
-    if (!cfg->dsk_key[0]) return;
+    if (t < 1700000000) return;                    /* 时间未同步, 无法判定"今天" */
 
     int32_t day = (int32_t)(t / 86400);
-    if (day == s_day && s_ver == ART_PROMPT_VER) return;   /* 今天已生成且画法未变 */
+    if (day == s_day && s_ver == ART_PROMPT_VER) return;   /* 今天已取且算法未变 */
 
-    /* 换天 **或** 换 prompt 版本 → 重新获得 3 次机会 (不重置的话改版当天会一直放弃) */
     if (s_try_day != day || s_try_ver != ART_PROMPT_VER) {
         s_try_day = day;
         s_try_ver = ART_PROMPT_VER;
         s_tries = 0;
     }
-    if (s_tries >= MAX_TRIES_PER_DAY) return;     /* 今天已放弃, 明天再说 */
+    if (s_tries >= MAX_TRIES_PER_DAY) return;
 
-    ESP_LOGI(TAG, "generating today's art (try %u/%u)...", s_tries + 1, MAX_TRIES_PER_DAY);
-    st->art.generating = true;                    /* UI 显示"生成中" */
-    bool ok = art_generate(st, cfg);
+    ESP_LOGI(TAG, "fetching today's art (try %u/%u)...", s_tries + 1, MAX_TRIES_PER_DAY);
+    st->art.generating = true;
+    bool ok = art_fetch(st);
     st->art.generating = false;
 
     if (ok) {
         s_day = day;
+        s_ver = ART_PROMPT_VER;
         st->art.valid = true;
+        nvs_handle_t h;
+        if (nvs_open(ART_NS, NVS_READWRITE, &h) == ESP_OK) {
+            nvs_set_i32(h, "day", day);
+            nvs_set_i32(h, "ver", ART_PROMPT_VER);
+            nvs_set_u8(h, "try", 0);
+            nvs_commit(h);
+            nvs_close(h);
+        }
     } else {
         s_tries++;
-        nvs_handle_t h;                           /* 持久化计数, 防重启后重复扣费 */
+        nvs_handle_t h;
         if (nvs_open(ART_NS, NVS_READWRITE, &h) == ESP_OK) {
             nvs_set_i32(h, "tryd", s_try_day);
             nvs_set_i32(h, "tryv", s_try_ver);

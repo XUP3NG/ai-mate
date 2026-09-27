@@ -84,12 +84,11 @@ typedef struct {
     lv_obj_t *portal_ap;
     lv_obj_t *portal_url;
 
-    /* ── Page 4: AI 每日像素画 ── */
+    /* ── Page 4: 每日一图 (Bing 壁纸抖动) ── */
     lv_obj_t *page_art;
-    void     *art_buf;              /* 320×240 RGB565 画布缓冲 (PSRAM, 150KB) */
+    void     *art_buf;              /* 400×248 RGB565 画布缓冲 (PSRAM, 194KB) */
     lv_obj_t *art_canvas;
-    lv_obj_t *art_title;            /* 底部: 标题 · DeepSeek 每日生成 */
-    lv_obj_t *art_hint;             /* 生成中/等待提示 */
+    lv_obj_t *art_title;            /* 底部: 标题 · Bing 每日壁纸 */
 } ui_elements_t;
 
 void ui_init(ui_elements_t *ui);

@@ -32,6 +32,7 @@ ESP32-S3 + RLCD 4.2" 反射式墨水屏（400×300，1-bit 黑白），**WiFi �
 | 城市定位 | `https://geocoding-api.open-meteo.com/v1/search` | — |
 | IP 定位 | `http://ip-api.com/json/` (主) / `https://api.ip.sb/geoip` (备) | — |
 | 时间 | SNTP ntp.aliyun.com / pool.ntp.org | — |
+| 每日一图 | `https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN` + `https://www.bing.com/th?id=...&w=400&h=248&rs=1&c=4` | — |
 
 - 智谱 `limits[]`: `unit=3`→5小时窗, `unit=6`→周窗; 字段 `percentage/usage/currentValue/remaining/nextResetTime`; type=1 个人, 2 团队
 - org/project: 浏览器登录 bigmodel.cn/coding-plan → F12 → Network → `quota/limit` 请求头
@@ -81,22 +82,34 @@ NVS `ai_hist`: `cents[63]`(分) `base` `dbase` `rechg` `lbal` `lepo`（坐标键
   电量 = `bat_pct_from_mv(mv × 4200 / full)`；充到 4.2V 则退回默认 4200。配网页 `bfull` 可手动指定（手动优先，不再自动学）。
   **必须带"最近 1 小时见过电压上升"这道闸门**：放电时轻载电压也会 30 分钟稳定不动，否则会把放电平台误学成满电，参考值越学越低、电量虚高。
 
-## AI 每日像素画 (Page 4)
+## 每日一图 (Page 4, Bing 壁纸)
 
-每天一次调 DeepSeek `chat/completions` 生成 40×30 的 1-bit 点阵画, UI 用 8×8 块放大成 320×240。
+每天一次拉 Bing 当日壁纸 → 设备端 JPEG 解码 → 抖动 → **400×248 全屏 1-bit**。**零成本、无需 Key**。
 
-- **画布一定要小**：文本模型对大画布空间控制力差, 80×60 出来全是抽象色块, **40×30 才画得出可辨认的剪影**
-- prompt 三要素: ①给**具体实物候选清单**(猫/灯塔/帆船/蘑菇/雪人…, 别让它"自由联想") ②密度约束
-  (主体占 60~80%、黑点占 15~35%) ③给一段**风格示例**(示范密度与留白)
-- `temperature=0.9`（高温度更抽象）、`max_tokens=2500`（1200 字符足够）
-- 解析: 找 `标题：xxx` 行 + 收集只含 `#`/`.` 且长度 ≥ ART_W/2 的行; 行数不足则垂直居中补白;
-  黑点占比 <4% 或 >45% 判为模型抽风, 丢弃
-- 成品会**逐行打到串口日志**(`art: |....|`)——不看屏幕也能判断画得像不像
-- 成本: 输出约 1200 字符 ≈ 1K token, **每天几分钱**; 实测一次 2~5 秒
-- **prompt 版本号 `ART_PROMPT_VER`**：改画法时 +1 → 已存的老画自动作废重画一次（之后恢复每日一次）；
-  重试计数按 (日 + 版本) 双键持久化, 否则改版当天会一直重试重复扣费
-- 存储 NVS `ai_art`: `day`/`ver`(成功) `tryd`/`tryv`/`try`(当日尝试) `title` `px`(150B 位图)
-- 画布缓冲 320×240 RGB565 = 150KB **放 PSRAM**（`heap_caps_malloc(MALLOC_CAP_SPIRAM)`）
+```
+1. GET https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN
+   → images[0].urlbase + title ("深海夜花园")
+2. GET https://www.bing.com{urlbase}_1920x1080.jpg&w=400&h=248&rs=1&c=4&pid=hp
+   ★ Bing 服务端直接裁成 400×248, 只有 20KB (原图 340KB) —— 省流量也省解码
+3. esp_new_jpeg 解码 (RGB565_LE) → 亮度 (0.299/0.587/0.114)
+4. 自动色阶 + 平坦区保护抖动 → 1-bit
+5. 存到 storage 分区 (裸分区, 非文件系统), 开机读回
+```
+
+- **抖动算法是关键**（详见 `art_dither()`）：
+  - 直接 Floyd–Steinberg → 大片暗部/亮部长满麻点，照片认不出
+  - 固定阈值 → 暗调照片（如星空）整幅变黑
+  - ✅ **先按直方图 10%/90% 分位定黑白场**（自动色阶），再**只对中间调抖动**，
+    极暗/极亮直接定死（`FLAT_LO=45` / `FLAT_HI=210`）→ 干净且保内容
+- **格式约定（踩过坑）**：位图里 `bit=1` = **黑**。抖动时 `on=1` 表示"白"，写位要 **取反**
+  （GDI+ 的 `Format1bppIndexed` 恰好相反: `bit=1`=白、`palette[0]`=黑，对拍时会骗人）
+- **持久化用裸分区**：`storage` 分区（1MB，原本给 SPIFFS，本项目未用文件系统）
+  → `esp_partition_erase_range/write/read`，头 `{magic,day,ver,title[40],crc}` + 12400B 位图 ≈ 12.5KB。
+  **不能塞 NVS**：nvs 分区只有 24KB，且单条上限 ~4KB
+- **渲染版本号 `ART_PROMPT_VER`**：改算法时 +1 → 已存的图作废重取一次（否则要等次日）
+- 失败重试 3 次/天；计数按 (日+版本) 双键存 NVS，防重启后重复拉取
+- PSRAM 缓冲: JPEG 192KB + RGB565 198KB + int16 亮度 198KB ≈ 590KB（8MB 里随便用）
+- 成品用**密度渐变**（` .:-=+*#%@`）打到串口 —— 抖动图用 OR 降采样会糊成一片 `#`，必须按墨点密度
 
 ## 省电
 
@@ -121,13 +134,14 @@ main/
 ├── net_query.c/h      # 智谱/DeepSeek、SNTP、消费历史、通用 HTTPS GET、gzip(puff) 解码
 ├── weather.c/h        # 双数据源天气 + 预警 + 分钟级降水 + IP/城市定位 + 图标映射
 ├── shtc3.c/h          # 板载 SHTC3 室内温湿度 (I2C 0x70, 用新版 i2c_master API)
-├── art.c/h            # AI 每日像素画 (DeepSeek 生成 40×30 点阵)
+├── art.c/h            # 每日一图 (Bing 壁纸 → JPEG 解码 → 1-bit 抖动, 全屏)
 └── ui/                # ui.c/h + font_cjk_16 + font_wx_icon_36/24 + font_wx_num_36
 components/rlcd_display/  # ST7305 驱动
 components/puff/          # DEFLATE 解压 (Mark Adler, 公共领域)
+components/esp_new_jpeg/  # 软件 JPEG 解码 (收编的预编译库, 原因见踩坑 #11)
 ```
 
-## UI (5 页：额度 / 消费柱状图 / 配网 / 天气 / 像素画)
+## UI (5 页：额度 / 消费柱状图 / 配网 / 天气 / 每日一图)
 
 轮播顺序 `order[] = {0, 1, 3, 4}`（配网页 2 不参与），每页 15 秒。
 
@@ -176,3 +190,12 @@ ESP-IDF v5.5.4 @ `C:\esp\v5.5.4\esp-idf`，工具链 `C:\Espressif`，Python 环
    任何小于 700 字节的缓冲都会编译失败 → 坐标一律用整数格式化（`%d.%04d`，见 `fmt_x1e4()`）
 10. **SHTC3 的 ID 不要严格比对**：本板实测 `id=0x0887`（CRC 正确），而 datasheet 标称 `0x0807`。
     严格比对会把一个完全正常的传感器判成"不在位"→ 只校验 **CRC 通过** 即采用，型号不符仅告警
+11. **托管组件带预编译 .a 时，中文路径会让 ld 挂掉**：`esp_new_jpeg` 用
+    `add_prebuilt_library("${CMAKE_CURRENT_SOURCE_DIR}/lib/...")`，托管组件路径被解析成
+    `D:/ESP/监控/...`（Python 组件管理器会把 subst 盘符还原成真实路径），`ld.exe` 报
+    "cannot find .../libesp32s3/libesp_new_jpeg.a"——**文件其实存在**。
+    解法：收编为本地组件 `components/esp_new_jpeg/`（本地组件路径是 `X:/cc_mate/components/...`，ASCII）。
+    这也是为什么不能只靠 subst
+12. **1-bit 位图的 bit 语义**：本项目位图 `bit=1`=**黑**；而 GDI+ `Format1bppIndexed` 里
+    `bit=1`=白（palette[0]=黑）。两边的渲染结果做对比时极易被反相骗过去——首版每日一图
+    就因为写位没取反，整幅图黑白颠倒，靠"设备 vs 电脑"逐字符对比才抓出来
