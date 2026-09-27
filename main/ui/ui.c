@@ -659,8 +659,12 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
             lv_label_set_text(ui->wx_meta, "");
         }
 
-        /* ── 天气预警横幅 (黑底白字, 最强制) ── */
-        if (s->wx.valid && s->wx.alert.valid && s->wx.alert.title[0]) {
+        /* ── 天气预警横幅 (黑底白字, 最强制) ──
+         * 无预警时不占位: 下方内容整体上移 26px, 柱状图相应加高, 避免留白 */
+        bool has_alert = s->wx.valid && s->wx.alert.valid && s->wx.alert.title[0];
+        int  dy = has_alert ? 0 : -26;
+
+        if (has_alert) {
             if (s->wx.alert.count > 1)
                 snprintf(b, sizeof(b), "%s%s   (+%u 条)",
                          s->wx.alert.severe ? "! " : "",
@@ -672,6 +676,18 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
             lv_obj_remove_flag(ui->wx_alert_box, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(ui->wx_alert_box, LV_OBJ_FLAG_HIDDEN);
+        }
+
+        /* 随预警有无而上移/复位 (摘要 / 预报三行) */
+        {
+            static const int col_x[WX_DAYS] = { 8, 104, 200, 296 };
+            lv_obj_set_pos(ui->wx_rain, 16, 126 + dy);
+            lv_obj_set_pos(ui->wx_peak, 256, 126 + dy);
+            for (int i = 0; i < WX_DAYS; i++) {
+                lv_obj_set_pos(ui->wx_day[i],       col_x[i], 150 + dy);
+                lv_obj_set_pos(ui->wx_day_icon[i],  col_x[i], 172 + dy);
+                lv_obj_set_pos(ui->wx_day_temp[i],  col_x[i], 200 + dy);
+            }
         }
 
         /* ── 降水摘要: 优先用和风分钟级 summary, 否则用逐小时推算 ── */
@@ -695,9 +711,10 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
         }
 
         /* ── 未来 2 小时降水柱状图 (24 格 × 5 分钟) ──
-         * 柱区 228..247, 基线 248: 与上方温度行(200..222)留 6px 间距 */
+         * 无预警时上方内容上移 26px, 柱高上限 20→46 填满空出的空间 */
         {
-            const int base_y = 248, max_h = 20;
+            const int base_y = 248;
+            const int max_h = has_alert ? 20 : 46;
             bool show = s->wx.valid && s->wx.minutely.valid;
             for (int i = 0; i < WX_MIN_N; i++) {
                 int h = 0;
