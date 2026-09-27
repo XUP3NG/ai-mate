@@ -280,15 +280,21 @@ void ui_init(ui_elements_t *ui) {
     lv_obj_set_style_text_color(ui->wx_meta, c_dim(), 0);
     lv_label_set_long_mode(ui->wx_meta, LV_LABEL_LONG_DOT);
 
-    /* 当前天气: 大图标 + 大号温度
-     * 度量对齐: icon_36 行高 36/基线 1, num_36 行高 28/基线 1
-     * 温度框 30..58 (视觉中心 44) == 图标框 26..62 (视觉中心 44) → 光学居中 */
+    /* 当前天气: 大图标 + 大号温度 + 湿度, 与右侧"室内温湿度"块左右分立
+     *
+     * 度量对齐: icon_36 行高 36/基线 1, num_36 行高 28/基线 1 (每字符 18px)
+     * 温度框 30..58 (视觉中心 44) == 图标框 26..62 (视觉中心 44) → 光学居中
+     *
+     * 横向预算 (400 宽, 左右边距 14): 图标 22..~52 | 温度 68.. | 度 | 湿度 x% |
+     *                                  …留白… | 室内 xx.x度 xx% (右端 386)
+     * 温度改到 x=68 (原 104) 是为了给"温度后紧跟湿度"腾地方: 最坏 "-10.5"
+     * (5×18=90px) 时左侧组止于 252, 右侧组起于 258, 仍不重叠。 */
     ui->wx_icon = label(ui->page_weather, 22, 26, 0);
     lv_obj_set_width(ui->wx_icon, LV_SIZE_CONTENT);
     lv_obj_set_style_text_font(ui->wx_icon, &font_wx_icon_36, 0);
     lv_label_set_text(ui->wx_icon, "");
 
-    ui->wx_temp = label(ui->page_weather, 104, 30, 0);
+    ui->wx_temp = label(ui->page_weather, 68, 30, 0);
     lv_obj_set_width(ui->wx_temp, LV_SIZE_CONTENT);
     lv_obj_set_style_text_font(ui->wx_temp, &font_wx_num_36, 0);
     lv_label_set_text(ui->wx_temp, "--");
@@ -297,20 +303,27 @@ void ui_init(ui_elements_t *ui) {
     lv_obj_set_width(ui->wx_unit, LV_SIZE_CONTENT);
     lv_label_set_text(ui->wx_unit, "度");
 
-    /* 室内温度 (板载 SHTC3): 与室外大温度同行、右对齐 —— 正好落在下方
-     * "湿度 88%" 的正上方, 形成一个右对齐的信息列, 不打断左侧大温度。
-     * 行高 18 → y=35 时视觉中心 44, 与 36px 大温度 (中心 44) 对齐。 */
-    ui->wx_in = label(ui->page_weather, 266, 35, 120);
+    /* 室外湿度: 紧跟在"度"后面 (位置在 ui_update 里动态对齐) */
+    ui->wx_hum = label(ui->page_weather, 0, 40, 0);
+    lv_obj_set_width(ui->wx_hum, LV_SIZE_CONTENT);
+
+    /* 室内温湿度 (板载 SHTC3): 温度行右端, 与左侧室外组左右分立 */
+    ui->wx_in = label(ui->page_weather, 252, 35, 134);
     lv_obj_set_style_text_align(ui->wx_in, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_long_mode(ui->wx_in, LV_LABEL_LONG_DOT);
     lv_label_set_text(ui->wx_in, "");
 
-    ui->wx_desc = label(ui->page_weather, 104, 70, 140);
+    /* 第二行: 天气描述 | 体感温度 | 空气质量(右端)
+     * 固定 x 而非动态对齐 —— 三个都可能有长文本, 固定格位保证永远不会互相压住 */
+    ui->wx_desc = label(ui->page_weather, 68, 70, 104);
     lv_label_set_long_mode(ui->wx_desc, LV_LABEL_LONG_DOT);
-    ui->wx_hum  = label(ui->page_weather, 250, 70, 136);
-    lv_obj_set_style_text_align(ui->wx_hum, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_style_text_color(ui->wx_hum, c_dim(), 0);
-    lv_label_set_long_mode(ui->wx_hum, LV_LABEL_LONG_DOT);
+
+    ui->wx_feel = label(ui->page_weather, 180, 70, 96);
+    lv_label_set_long_mode(ui->wx_feel, LV_LABEL_LONG_DOT);
+
+    ui->wx_aqi = label(ui->page_weather, 290, 70, 96);
+    lv_obj_set_style_text_align(ui->wx_aqi, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_long_mode(ui->wx_aqi, LV_LABEL_LONG_DOT);
 
     /* 分隔线 */
     rect(ui->page_weather, 14, 94, DISPLAY_WIDTH - 28, 1, c_tx());
@@ -650,6 +663,28 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
             lv_label_set_text(ui->wx_desc, s->wx.text);
             snprintf(b, sizeof(b), "湿度 %d%%", s->wx.humidity);
             lv_label_set_text(ui->wx_hum, b);
+            /* 湿度紧跟"度"后面 (与温度同行), 不再单独占一行 */
+            lv_obj_align_to(ui->wx_hum, ui->wx_unit, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
+
+            /* 体感温度 (和风 feelsLike / Open-Meteo apparent_temperature) */
+            if (s->wx.feels_valid)
+                snprintf(b, sizeof(b), "体感 %.1f度", s->wx.feels_x10 / 10.0);
+            else
+                b[0] = '\0';
+            lv_label_set_text(ui->wx_feel, b);
+
+            /* 空气质量: 类别超过 2 字 (轻度污染…) 时只显示类别, 否则数值+类别 */
+            if (s->wx.aqi_valid) {
+                if (s->wx.aqi_cat[0] && strlen(s->wx.aqi_cat) <= 6)
+                    snprintf(b, sizeof(b), "空气 %s %u", s->wx.aqi_cat, s->wx.aqi);
+                else if (s->wx.aqi_cat[0])
+                    snprintf(b, sizeof(b), "空气 %s", s->wx.aqi_cat);
+                else
+                    snprintf(b, sizeof(b), "空气 %u", s->wx.aqi);
+            } else {
+                b[0] = '\0';
+            }
+            lv_label_set_text(ui->wx_aqi, b);
 
             /* 页眉右侧: 数据来源 + 更新时间 (和风条款要求标注来源) */
             uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
@@ -664,12 +699,15 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
             lv_obj_align_to(ui->wx_unit, ui->wx_temp, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -6);
             lv_label_set_text(ui->wx_desc, s->wx.err[0] ? s->wx.err : "查询中...");
             lv_label_set_text(ui->wx_hum, "");
+            lv_label_set_text(ui->wx_feel, "");
+            lv_label_set_text(ui->wx_aqi, "");
             lv_label_set_text(ui->wx_meta, "");
         }
 
-        /* 室内温度 (板载 SHTC3): 与天气是否查询成功无关, 独立显示 */
+        /* 室内温湿度 (板载 SHTC3): 与天气是否查询成功无关, 独立显示 */
         if (s->indoor_valid) {
-            snprintf(b, sizeof(b), "室内 %.1f度", s->indoor_temp_x10 / 10.0);
+            snprintf(b, sizeof(b), "室内 %.1f度 %u%%",
+                     s->indoor_temp_x10 / 10.0, s->indoor_rh);
             lv_label_set_text(ui->wx_in, b);
         } else {
             lv_label_set_text(ui->wx_in, "");

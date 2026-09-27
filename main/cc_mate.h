@@ -106,6 +106,12 @@ typedef struct {
     char     src[16];               /* 数据来源: Open-Meteo / 和风天气 (4 汉字=12B+NUL) */
     int16_t  temp_x10;              /* 当前温度 (0.1°C) */
     uint8_t  humidity;              /* 当前湿度 % */
+    int16_t  feels_x10;             /* 体感温度 (0.1°C) */
+    bool     feels_valid;           /* 体感温度是否有效 */
+    /* 空气质量 (和风独有; Open-Meteo 无此数据) */
+    bool     aqi_valid;
+    uint16_t aqi;                   /* 中国标准 AQI */
+    char     aqi_cat[16];           /* 优 / 良 / 轻度污染 … (跟随 lang=zh) */
     char     text[20];              /* 当前天气文字 (中文) */
     char     icon[8];               /* 当前图标 (UTF-8 符号) */
     char     dtext[WX_DAYS][20];    /* 每日天气文字 */

@@ -27,7 +27,7 @@ ESP32-S3 + RLCD 4.2" 反射式墨水屏（400×300，1-bit 黑白），**WiFi �
 |------|------|------|
 | 智谱额度 | `GET https://bigmodel.cn/api/monitor/usage/quota/limit?type=N` | Header: `Authorization`(raw key) + `bigmodel-organization` + `bigmodel-project` |
 | DeepSeek 余额 | `GET https://api.deepseek.com/user/balance` | `Authorization: Bearer <key>` |
-| 天气/预警/分钟级 | 和风 `https://<API Host>/weather/v1/{current,daily,hourly}/..`、`/weatheralert/v1/current/..`、`/v7/minutely/5m` | `X-QW-Api-Key: <key>` |
+| 天气/预警/分钟级 | 和风 `https://<API Host>/weather/v1/{current,daily,hourly}/..`、`/weatheralert/v1/current/..`、`/v7/minutely/5m`、`/airquality/v1/current/..` | `X-QW-Api-Key: <key>` |
 | 天气(备选,免Key) | `https://api.open-meteo.com/v1/forecast`（含 current/daily/hourly） | — |
 | 城市定位 | `https://geocoding-api.open-meteo.com/v1/search` | — |
 | IP 定位 | `http://ip-api.com/json/` (主) / `https://api.ip.sb/geoip` (备) | — |
@@ -37,6 +37,13 @@ ESP32-S3 + RLCD 4.2" 反射式墨水屏（400×300，1-bit 黑白），**WiFi �
 - org/project: 浏览器登录 bigmodel.cn/coding-plan → F12 → Network → `quota/limit` 请求头
 - **和风返回 gzip（无视 `Accept-Encoding: identity`）**，ESP-IDF 无 zlib → 内置 `components/puff` 解压
 - 和风 `type=1`…见上；预警 `alerts[].eventType.name` + `color.code`；分钟级 `summary` + `minutely[24].precip`(mm/5min)
+- **和风 v1 响应字段**（`/weather/v1/current` 一次拿全, 加显示项不用加请求）：
+  `condition.{text,code}` / `temperature.value` / `feelsLike.value` / `humidity`(0~1 小数) /
+  `wind.direction.compass` + `wind.scale` / `windGust` / `precipitation.{amount,intensity,type}` /
+  `pressure` / `visibility`(m) / `dewPoint` / `cloudCover`(0~1) / `uvIndex`
+- 空气质量 `/airquality/v1/current/{lat}/{lon}`：`indexes[]` 里 `code=chn` 是中国标准（另有 `qaqi`/`us-epa`），
+  取 `aqi` + `category`（跟随 `lang=zh` 返回"优/良/轻度污染…"）。**每个查询周期多 1 次请求**
+- Open-Meteo 无空气质量；体感用 `current=apparent_temperature`（同一请求里加参数，不额外请求）
 
 ## 每日消费推算 (无 userToken)
 
@@ -107,8 +114,13 @@ components/puff/          # DEFLATE 解压 (Mark Adler, 公共领域)
 天气页布局要点（**按导出字体真实度量排布**）：
 - 字体行高：`font_cjk_16`=18（≠16!）, `font_wx_icon_36`=36, `font_wx_num_36`=28（≠36!）, Montserrat20=22
 - 图标与温度**视觉中心对齐**（同为 44）：icon y=26、temp y=30
-- **室内温度**（板载 SHTC3）在温度行右端：`wx_in` x=266 y=35 w=120 右对齐（行高 18 → 中心 44，
-  与 36px 大温度同轴；右边缘 386 与"湿度 88%"对齐成一列）。传感器不在位时留空，不显示占位符
+- **室内温度**（板载 SHTC3）在温度行右端：`wx_in` x=252 y=35 w=134 右对齐（行高 18 → 中心 44）
+- **温湿度配对**：室外 `湿度 86%` 紧跟大温度（`lv_obj_align_to` 在"度"后面 +10px），
+  室内 `室内 25.9度 70%` 右端对齐
+- **第二行三个固定格位**（固定 x 而非动态对齐, 因为三者都可能很长）：
+  `wx_desc` 68..172 | `wx_feel` 180..276 | `wx_aqi` 290..386 右对齐
+- 大温度 x 从 104 挪到 **68** 是为了给"湿度紧跟温度"腾位置：`font_wx_num_36` 每字符 18px,
+  最坏 `-10.5` = 90px, 左侧组止于 252, 右侧组起于 258, 仍不重叠
 - 预警横幅**动态占位**：有预警时 100..120（黑底白字反白），无预警时下方内容上移 26px、柱高上限 20→46px
 - **所有动态文本标签必须设 `LV_LABEL_LONG_DOT`**，否则超长会换行压住下一行（已踩坑：峰值标签）
 

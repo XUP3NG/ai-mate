@@ -428,7 +428,7 @@ static bool fetch_openmeteo(weather_info_t *wx, int32_t lat, int32_t lon) {
     char url[360];
     snprintf(url, sizeof(url),
              OM_URL "?latitude=%.4f&longitude=%.4f"
-             "&current=temperature_2m,relative_humidity_2m,weather_code"
+             "&current=temperature_2m,relative_humidity_2m,weather_code,apparent_temperature"
              "&daily=weather_code,temperature_2m_max,temperature_2m_min"
              "&hourly=precipitation_probability,precipitation,weather_code"
              "&forecast_days=%d&forecast_hours=%d&timezone=Asia%%2FShanghai",
@@ -459,6 +459,10 @@ static bool fetch_openmeteo(weather_info_t *wx, int32_t lat, int32_t lon) {
             wx->temp_x10 = (int16_t)(j->valuedouble * 10);
         if ((j = cJSON_GetObjectItem(cur, "relative_humidity_2m")) && cJSON_IsNumber(j))
             wx->humidity = (uint8_t)j->valuedouble;
+        if ((j = cJSON_GetObjectItem(cur, "apparent_temperature")) && cJSON_IsNumber(j)) {
+            wx->feels_x10 = (int16_t)(j->valuedouble * 10);
+            wx->feels_valid = true;
+        }
         if ((j = cJSON_GetObjectItem(cur, "weather_code")) && cJSON_IsNumber(j)) {
             uint8_t code = (uint8_t)j->valuedouble;
             strlcpy(wx->text, wmo_text(code), sizeof(wx->text));
@@ -579,6 +583,50 @@ static void fetch_qw_alert(weather_info_t *wx, const app_config_t *cfg, int32_t 
              wx->alert.count, wx->alert.severe ? "严重" : "一般");
 }
 
+/* ── 空气质量 (和风, indexes[] 里优先取中国标准 chn) ── */
+static void fetch_qw_air(weather_info_t *wx, const app_config_t *cfg, int32_t lat, int32_t lon) {
+    char url[224];
+    snprintf(url, sizeof(url), "https://%s/airquality/v1/current/%.2f/%.2f?lang=zh",
+             cfg->qw_host, lat / 10000.0, lon / 10000.0);
+
+    int n = net_https_get_ex(url, NULL, NULL, NULL, cfg->qw_key, s_buf, sizeof(s_buf));
+    if (n <= 0) return;
+    int dl = net_http_body_decode(s_buf, n, s_dec, sizeof(s_dec));
+    if (dl <= 0) return;
+
+    cJSON *root = cJSON_Parse(s_dec);
+    if (!root) {
+        ESP_LOGW(TAG, "qw air: JSON 解析失败, body[%d]: %.160s", dl, s_dec);
+        return;
+    }
+
+    cJSON *idxs = cJSON_GetObjectItem(root, "indexes");
+    if (cJSON_IsArray(idxs)) {
+        int cnt = cJSON_GetArraySize(idxs);
+        cJSON *pick = NULL;
+        for (int i = 0; i < cnt; i++) {
+            cJSON *e = cJSON_GetArrayItem(idxs, i);
+            if (!e) continue;
+            cJSON *c = cJSON_GetObjectItem(e, "code");
+            if (c && c->valuestring && strcmp(c->valuestring, "chn") == 0) { pick = e; break; }
+            if (!pick) pick = e;                  /* 没有中国标准就退回第一条 */
+        }
+        if (pick) {
+            cJSON *ja = cJSON_GetObjectItem(pick, "aqi");
+            cJSON *jc = cJSON_GetObjectItem(pick, "category");
+            if (ja && cJSON_IsNumber(ja)) {
+                double v = ja->valuedouble;
+                wx->aqi = (uint16_t)(v < 0 ? 0 : (v > 999 ? 999 : v + 0.5));
+                wx->aqi_valid = true;
+            }
+            if (jc && jc->valuestring)
+                strlcpy(wx->aqi_cat, jc->valuestring, sizeof(wx->aqi_cat));
+        }
+    }
+    cJSON_Delete(root);
+    if (wx->aqi_valid) ESP_LOGI(TAG, "air: AQI %u %s", wx->aqi, wx->aqi_cat);
+}
+
 /* ── 分钟级降水 (和风, 未来 2 小时) ── */
 static void fetch_qw_minutely(weather_info_t *wx, const app_config_t *cfg, int32_t lat, int32_t lon) {
     char url[224];
@@ -668,6 +716,14 @@ static bool fetch_qweather(weather_info_t *wx, const app_config_t *cfg, int32_t 
     }
     cJSON *jh = cJSON_GetObjectItem(root, "humidity");      /* 0~1 小数 */
     if (jh && cJSON_IsNumber(jh)) wx->humidity = (uint8_t)(jh->valuedouble * 100 + 0.5);
+    cJSON *jf = cJSON_GetObjectItem(root, "feelsLike");     /* 体感温度 (同响应, 零额外请求) */
+    if (jf) {
+        cJSON *v = cJSON_GetObjectItem(jf, "value");
+        if (v && cJSON_IsNumber(v)) {
+            wx->feels_x10 = (int16_t)(v->valuedouble * 10);
+            wx->feels_valid = true;
+        }
+    }
     cJSON_Delete(root);
 
     /* 每日预报 */
@@ -770,9 +826,10 @@ static bool fetch_qweather(weather_info_t *wx, const app_config_t *cfg, int32_t 
 
     cJSON_Delete(root);
 
-    /* 预警 + 分钟级降水 (和风独有, 失败不影响主数据) */
+    /* 预警 + 分钟级降水 + 空气质量 (和风独有, 失败不影响主数据) */
     fetch_qw_alert(wx, cfg, lat, lon);
     fetch_qw_minutely(wx, cfg, lat, lon);
+    fetch_qw_air(wx, cfg, lat, lon);
 
     strlcpy(wx->src, "和风天气", sizeof(wx->src));
     if (!ok) strlcpy(wx->err, "和风: 无预报数据", sizeof(wx->err));
@@ -851,8 +908,12 @@ void weather_query(app_state_t *st, const app_config_t *cfg) {
         st->wx.valid = true;
         st->wx.err[0] = '\0';
         st->wx.last_ok_ms = (uint32_t)(esp_timer_get_time() / 1000);
-        ESP_LOGI(TAG, "[%s] %s: %s %.1f°C 湿%d%% | 明日 %s %.0f/%.0f°C",
+        char feel[24] = "", air[40] = "";
+        if (st->wx.feels_valid) snprintf(feel, sizeof(feel), " 体感%.1f°C", st->wx.feels_x10 / 10.0);
+        if (st->wx.aqi_valid)   snprintf(air, sizeof(air), " 空气%s%u", st->wx.aqi_cat, st->wx.aqi);
+        ESP_LOGI(TAG, "[%s] %s: %s %.1f°C 湿%d%%%s%s | 明日 %s %.0f/%.0f°C",
                  st->wx.src, st->wx.city, st->wx.text, st->wx.temp_x10 / 10.0, st->wx.humidity,
+                 feel, air,
                  st->wx.dtext[1], st->wx.tmax_x10[1] / 10.0, st->wx.tmin_x10[1] / 10.0);
     } else {
         ESP_LOGW(TAG, "weather failed: %s", st->wx.err);

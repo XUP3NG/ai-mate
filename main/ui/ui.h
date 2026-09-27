@@ -66,6 +66,8 @@ typedef struct {
     lv_obj_t *wx_in;               /* 室内温度 (板载 SHTC3), 与 wx_temp 同行右侧 */
     lv_obj_t *wx_desc;             /* 天气文字 */
     lv_obj_t *wx_hum;              /* 湿度 */
+    lv_obj_t *wx_feel;             /* 体感温度 (第二行) */
+    lv_obj_t *wx_aqi;              /* 空气质量 (第二行右端, 和风独有) */
     lv_obj_t *wx_alert_box;        /* 预警横幅 (黑底) */
     lv_obj_t *wx_alert;            /* 预警文字 (白字) */
     lv_obj_t *wx_rain;             /* 降水摘要 (分钟级 summary) */
