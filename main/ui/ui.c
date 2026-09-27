@@ -302,6 +302,7 @@ void ui_init(ui_elements_t *ui) {
     ui->wx_hum  = label(ui->page_weather, 250, 70, 136);
     lv_obj_set_style_text_align(ui->wx_hum, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_style_text_color(ui->wx_hum, c_dim(), 0);
+    lv_label_set_long_mode(ui->wx_hum, LV_LABEL_LONG_DOT);
 
     /* 分隔线 */
     rect(ui->page_weather, 14, 94, DISPLAY_WIDTH - 28, 1, c_tx());
@@ -313,12 +314,14 @@ void ui_init(ui_elements_t *ui) {
     lv_label_set_long_mode(ui->wx_alert, LV_LABEL_LONG_DOT);
     lv_obj_add_flag(ui->wx_alert_box, LV_OBJ_FLAG_HIDDEN);
 
-    /* 降水摘要 (和风分钟级 summary) + 峰值 */
+    /* 降水摘要 (和风分钟级 summary) + 峰值 (单位精简为 mm/5m 以留足宽度) */
     ui->wx_rain = label(ui->page_weather, 16, 126, 240);
     lv_label_set_long_mode(ui->wx_rain, LV_LABEL_LONG_DOT);
     ui->wx_peak = label(ui->page_weather, 256, 126, 130);
     lv_obj_set_style_text_align(ui->wx_peak, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_style_text_color(ui->wx_peak, c_dim(), 0);
+    lv_label_set_long_mode(ui->wx_peak, LV_LABEL_LONG_DOT);
+    lv_label_set_text(ui->wx_peak, "");
 
     /* 4 列预报 */
     {
@@ -351,11 +354,11 @@ void ui_init(ui_elements_t *ui) {
     lv_obj_set_style_text_align(ui->wx_axis[1], LV_TEXT_ALIGN_CENTER, 0);
     ui->wx_axis[2] = label(ui->page_weather, 324, 252, 60);
     lv_obj_set_style_text_align(ui->wx_axis[2], LV_TEXT_ALIGN_RIGHT, 0);
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < 3; i++) {
         lv_obj_set_style_text_color(ui->wx_axis[i], c_dim(), 0);
-    lv_label_set_text(ui->wx_axis[0], "");
-    lv_label_set_text(ui->wx_axis[1], "");
-    lv_label_set_text(ui->wx_axis[2], "");
+        lv_label_set_long_mode(ui->wx_axis[i], LV_LABEL_LONG_DOT);
+        lv_label_set_text(ui->wx_axis[i], "");
+    }
 
     /* ════ Page 2: 配网提示 ════ */
     ui->page_portal = lv_obj_create(scr);
@@ -685,7 +688,7 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
             lv_label_set_text(ui->wx_rain, has ? b : "");
 
             if (s->wx.valid && s->wx.minutely.valid && s->wx.minutely.peak_x100 > 5)
-                snprintf(b, sizeof(b), "峰值 %.2f mm/5min", s->wx.minutely.peak_x100 / 100.0);
+                snprintf(b, sizeof(b), "峰值 %.2fmm/5m", s->wx.minutely.peak_x100 / 100.0);
             else
                 b[0] = '\0';
             lv_label_set_text(ui->wx_peak, b);
