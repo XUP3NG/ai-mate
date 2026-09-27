@@ -48,8 +48,11 @@ void wx_loc_clear_manual(const char *ssid, const app_config_t *cfg, bool all);
 /* WMO 天气码 → 中文描述 */
 const char *wmo_text(uint8_t code);
 
-/* WMO 天气码 → 字体自带图标符号 (font_cjk_16 含 0x2600-0x27BF) */
+/* WMO 天气码 → 字体图标 (QWeather Icons 码点, UTF-8; 静态缓冲, 单线程用) */
 const char *wmo_icon(uint8_t code);
+
+/* 空气质量图标 (QWeather Icons air-quality, UTF-8; 静态缓冲) */
+const char *wx_aqi_icon(void);
 
 #ifdef __cplusplus
 }

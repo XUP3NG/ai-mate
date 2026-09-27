@@ -9,8 +9,9 @@ idf_component_register(
         "art.c"
         "ui/ui.c"
         "ui/font_cjk_16.c"
-        "ui/font_wx_icon_36.c"
-        "ui/font_wx_icon_24.c"
+        "ui/font_qw_36.c"
+        "ui/font_qw_24.c"
+        "ui/font_qw_16.c"
         "ui/font_wx_num_36.c"
     INCLUDE_DIRS
         "."

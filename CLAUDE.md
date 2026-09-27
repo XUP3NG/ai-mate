@@ -135,7 +135,8 @@ main/
 ├── weather.c/h        # 双数据源天气 + 预警 + 分钟级降水 + IP/城市定位 + 图标映射
 ├── shtc3.c/h          # 板载 SHTC3 室内温湿度 (I2C 0x70, 用新版 i2c_master API)
 ├── art.c/h            # 每日一图 (Bing 壁纸 → JPEG 解码 → 1-bit 抖动, 全屏)
-└── ui/                # ui.c/h + font_cjk_16 + font_wx_icon_36/24 + font_wx_num_36
+└── ui/                # ui.c/h + font_cjk_16 + font_qw_36/24/16 (和风图标) + font_wx_num_36
+    └── icons/         # QWeather Icons 字体源 (ttf/json/LICENSE, 用于重新生成)
 components/rlcd_display/  # ST7305 驱动
 components/puff/          # DEFLATE 解压 (Mark Adler, 公共领域)
 components/esp_new_jpeg/  # 软件 JPEG 解码 (收编的预编译库, 原因见踩坑 #11)
@@ -145,14 +146,25 @@ components/esp_new_jpeg/  # 软件 JPEG 解码 (收编的预编译库, 原因见
 
 轮播顺序 `order[] = {0, 1, 3, 4}`（配网页 2 不参与），每页 15 秒。
 
+**天气图标 = QWeather Icons 字体**（<https://icons.qweather.com>，MIT）：
+- 源文件在 `main/ui/icons/`（ttf/json/LICENSE），生成命令（在 main/ui 下）：
+  `npx lv_font_conv --font icons/qweather-icons.ttf --range 0xF101-0xF146,0xF21A,0xF2E6 --size N --bpp 1 --format lvgl --no-compress -o font_qw_N.c`
+- 已生成 `font_qw_36`（当前天气，行高 **37**）、`font_qw_24`（4 日预报）、`font_qw_16`（行内空气质量）
+- **码点映射必须查表**：`weather.c` 的 `QW_ICON_MAP[]`（和风代码→码点）。
+  100-104→0xF101-105、300-318→0xF10A-11C、399→0xF11F、400-410→0xF120-12A、499→0xF12D…
+  ⚠️ 3xx/4xx/5xx 的码点**不是**按代码线性排的（350 夜间阵雨=0xF11D 插在 318 和 399 之间）
+- 图标以 UTF-8 存进 `wx->icon`（3 字节，`icon_utf8()`）；旧方案（Unicode ☀☁☂❄⚡ + font_wx_icon_36/24）已删除
+
 天气页布局要点（**按导出字体真实度量排布**）：
-- 字体行高：`font_cjk_16`=18（≠16!）, `font_wx_icon_36`=36, `font_wx_num_36`=28（≠36!）, Montserrat20=22
-- 图标与温度**视觉中心对齐**（同为 44）：icon y=26、temp y=30
+- 字体行高：`font_cjk_16`=18（≠16!）, `font_qw_36`=37, `font_qw_24`=25, `font_wx_num_36`=28（≠36!）, Montserrat20=22
+- 图标与温度**视觉中心对齐**（同为 44）：icon y=26（行高 37 → 中心 44.5）、temp y=30
 - **室内温度**（板载 SHTC3）在温度行右端：`wx_in` x=252 y=35 w=134 右对齐（行高 18 → 中心 44）
 - **温湿度配对**：室外 `湿度 86%` 紧跟大温度（`lv_obj_align_to` 在"度"后面 +10px），
   室内 `室内 25.9度 70%` 右端对齐
 - **第二行三个固定格位**（固定 x 而非动态对齐, 因为三者都可能很长）：
-  `wx_desc` 68..172 | `wx_feel` 180..276 | `wx_aqi` 290..386 右对齐
+  `wx_desc` 68..172 | `wx_feel` 180..276 | AQI 图标 290..308 + `wx_aqi` 306..386 右对齐
+- **空气质量已图标化**：`wx_aqi_icon`（font_qw_16, air-quality 图标）代替"空气"二字,
+  文本只剩"类别 数值"（类别>2 字时只显示类别）
 - 大温度 x 从 104 挪到 **68** 是为了给"湿度紧跟温度"腾位置：`font_wx_num_36` 每字符 18px,
   最坏 `-10.5` = 90px, 左侧组止于 252, 右侧组起于 258, 仍不重叠
 - 预警横幅**动态占位**：有预警时 100..120（黑底白字反白），无预警时下方内容上移 26px、柱高上限 20→46px

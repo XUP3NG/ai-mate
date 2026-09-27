@@ -60,14 +60,15 @@ typedef struct {
     lv_obj_t *page_weather;
     lv_obj_t *wx_city;             /* 左上: 城市 */
     lv_obj_t *wx_meta;             /* 右上: 更新时间 / 错误 */
-    lv_obj_t *wx_icon;             /* 当前天气大图标 (font_wx_icon_36) */
+    lv_obj_t *wx_icon;             /* 当前天气大图标 (font_qw_36) */
     lv_obj_t *wx_temp;             /* 当前温度 (font_wx_num_36) */
     lv_obj_t *wx_unit;             /* "度" */
     lv_obj_t *wx_in;               /* 室内温度 (板载 SHTC3), 与 wx_temp 同行右侧 */
     lv_obj_t *wx_desc;             /* 天气文字 */
     lv_obj_t *wx_hum;              /* 湿度 */
     lv_obj_t *wx_feel;             /* 体感温度 (第二行) */
-    lv_obj_t *wx_aqi;              /* 空气质量 (第二行右端, 和风独有) */
+    lv_obj_t *wx_aqi_icon;         /* 空气质量图标 (font_qw_16, 和风独有) */
+    lv_obj_t *wx_aqi;              /* 空气质量类别/数值 (第二行右端, 和风独有) */
     lv_obj_t *wx_alert_box;        /* 预警横幅 (黑底) */
     lv_obj_t *wx_alert;            /* 预警文字 (白字) */
     lv_obj_t *wx_rain;             /* 降水摘要 (分钟级 summary) */
@@ -76,7 +77,7 @@ typedef struct {
     lv_obj_t *wx_min_base;         /* 柱状图基线 */
     lv_obj_t *wx_axis[3];          /* 横轴: 现在 / +1小时 / +2小时 */
     lv_obj_t *wx_day[WX_DAYS];         /* 预报日期标签 (今天/明天/周X) */
-    lv_obj_t *wx_day_icon[WX_DAYS];    /* 预报图标 (font_wx_icon_24) */
+    lv_obj_t *wx_day_icon[WX_DAYS];    /* 预报图标 (font_qw_24) */
     lv_obj_t *wx_day_temp[WX_DAYS];    /* 预报高低温 (montserrat_20) */
 
     /* ── Page 2: 配网提示 ── */

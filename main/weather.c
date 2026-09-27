@@ -137,26 +137,86 @@ const char *wmo_text(uint8_t code) {
     }
 }
 
-const char *wmo_icon(uint8_t code) {
-    if (code <= 1)        return "\xE2\x98\x80";          /* ☀ 晴 */
-    if (code == 2 || code == 3) return "\xE2\x98\x81";    /* ☁ 多云/阴 */
-    if (code == 45 || code == 48) return "\xE2\x98\xB0";  /* ☰ 雾 */
-    if (code >= 51 && code <= 57) return "\xE2\x98\x94";  /* ☔ 毛毛雨 */
-    if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return "\xE2\x98\x82"; /* ☂ 雨 */
-    if ((code >= 71 && code <= 77) || code == 85 || code == 86) return "\xE2\x9D\x84";   /* ❄ 雪 */
-    if (code >= 95)       return "\xE2\x9A\xA1";          /* ⚡ 雷雨 */
-    return "\xE2\x98\x81";
+/* ── 图标: QWeather Icons 字体 (https://icons.qweather.com, MIT) ──
+ * 图标命名 = 和风天气代码 (sunny=100 晴, light-rain=305 小雨 …), 码点在 PUA 区 0xF101 起。
+ * 生成的字体只含 --range 0xF101-0xF146,0xF21A,0xF2E6 (见 ui/font_qw_*.c)。
+ * 映射踩过坑: 3xx/4xx/5xx 的码点**不是**按代码线性排的, 必须查表。
+ */
+typedef struct { short code; unsigned short cp; } qw_icon_map_t;
+static const qw_icon_map_t QW_ICON_MAP[] = {
+    /* 1xx 晴/多云/阴 */
+    {100,0xF101},{101,0xF102},{102,0xF103},{103,0xF104},{104,0xF105},
+    {150,0xF106},{151,0xF107},{152,0xF108},{153,0xF109},
+    /* 3xx 雨 (350/351 为夜间阵雨) */
+    {300,0xF10A},{301,0xF10B},{302,0xF10C},{303,0xF10D},{304,0xF10E},
+    {305,0xF10F},{306,0xF110},{307,0xF111},{308,0xF112},{309,0xF113},
+    {310,0xF114},{311,0xF115},{312,0xF116},{313,0xF117},{314,0xF118},
+    {315,0xF119},{316,0xF11A},{317,0xF11B},{318,0xF11C},
+    {350,0xF11D},{351,0xF11E},{399,0xF11F},
+    /* 4xx 雪 (456/457 为夜间阵雪) */
+    {400,0xF120},{401,0xF121},{402,0xF122},{403,0xF123},{404,0xF124},
+    {405,0xF125},{406,0xF126},{407,0xF127},{408,0xF128},{409,0xF129},
+    {410,0xF12A},{456,0xF12B},{457,0xF12C},{499,0xF12D},
+    /* 5xx 雾/霾/沙尘 */
+    {500,0xF12E},{501,0xF12F},{502,0xF130},{503,0xF132},{504,0xF131},
+    {507,0xF134},{508,0xF133},{509,0xF1AD},{510,0xF135},{511,0xF137},
+    {512,0xF138},{513,0xF139},{514,0xF13A},{515,0xF13B},
+    /* 9xx 冷热 */
+    {900,0xF144},{901,0xF145},
+};
+#define QW_ICON_UNKNOWN 0xF146   /* unknown */
+#define QW_ICON_AIRQ    0xF2E6   /* air-quality */
+
+static int qw_cp(int code) {
+    for (unsigned i = 0; i < sizeof(QW_ICON_MAP) / sizeof(QW_ICON_MAP[0]); i++)
+        if (QW_ICON_MAP[i].code == code) return QW_ICON_MAP[i].cp;
+    return QW_ICON_UNKNOWN;
 }
 
-/* ── 和风图标代码 → 符号 (官方图标: 1xx 晴/云, 2xx 风, 3xx 雨, 4xx 雪, 5xx 雾霾) ── */
-static const char *qw_icon(const char *code) {
-    int c = atoi(code ? code : "0");
-    if (c == 100 || c == 102 || c == 103 || c == 150 || c == 153) return "\xE2\x98\x80"; /* ☀ */
-    if (c == 302 || c == 303 || c == 304) return "\xE2\x9A\xA1";                          /* ⚡ 雷阵雨 */
-    if (c >= 300 && c <= 399) return (c >= 310 && c <= 313) ? "\xE2\x98\x94" : "\xE2\x98\x82"; /* ☔/☂ 雨 */
-    if (c >= 400 && c <= 499) return "\xE2\x9D\x84";                                       /* ❄ 雪 */
-    if (c >= 500 && c <= 515) return "\xE2\x98\xB0";                                       /* ☰ 雾/霾/沙尘 */
-    return "\xE2\x98\x81";                                                                 /* ☁ 其他含风 */
+static void icon_utf8(int cp, char *out, size_t sz) {
+    if (sz < 4) return;
+    out[0] = (char)(0xE0 | (cp >> 12));
+    out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (cp & 0x3F));
+    out[3] = '\0';
+}
+
+const char *wmo_icon(uint8_t code) {
+    /* Open-Meteo 的 WMO 代码 → 和风代码 → 图标 */
+    static char out[4];
+    int q;
+    if (code == 0)                     q = 100;
+    else if (code == 1 || code == 2)   q = 102;      /* 少云 */
+    else if (code == 3)                q = 101;      /* 多云 */
+    else if (code == 45 || code == 48) q = 501;      /* 雾 */
+    else if (code >= 51 && code <= 55) q = 309;      /* 毛毛雨 */
+    else if (code == 56 || code == 57) q = 313;      /* 冻雨 */
+    else if (code == 61)               q = 305;
+    else if (code == 63)               q = 306;
+    else if (code == 65)               q = 307;
+    else if (code == 66 || code == 67) q = 313;
+    else if (code == 71)               q = 400;
+    else if (code == 73)               q = 401;
+    else if (code == 75)               q = 402;
+    else if (code == 76 || code == 77) q = 499;
+    else if (code == 80 || code == 81) q = 300;      /* 阵雨 */
+    else if (code == 82)               q = 301;      /* 强阵雨 */
+    else if (code == 85 || code == 86) q = 407;      /* 阵雪 */
+    else if (code == 95)               q = 302;      /* 雷阵雨 */
+    else if (code == 96 || code == 99) q = 304;      /* 雷阵雨伴冰雹 */
+    else                               q = 999;
+    icon_utf8(qw_cp(q), out, sizeof(out));
+    return out;
+}
+
+static void qw_icon(const char *code, char *out, size_t sz) {
+    icon_utf8(qw_cp(atoi(code ? code : "0")), out, sz);
+}
+
+const char *wx_aqi_icon(void) {
+    static char out[4];
+    icon_utf8(QW_ICON_AIRQ, out, sizeof(out));
+    return out;
 }
 
 /* ── URL 编码 (中文城市名) ── */
@@ -706,7 +766,7 @@ static bool fetch_qweather(weather_info_t *wx, const app_config_t *cfg, int32_t 
         cJSON *jt = cJSON_GetObjectItem(cond, "text");
         cJSON *jc = cJSON_GetObjectItem(cond, "code");
         if (jt && jt->valuestring) strlcpy(wx->text, jt->valuestring, sizeof(wx->text));
-        if (jc && jc->valuestring) strlcpy(wx->icon, qw_icon(jc->valuestring), sizeof(wx->icon));
+        if (jc && jc->valuestring) qw_icon(jc->valuestring, wx->icon, sizeof(wx->icon));
         ok = true;
     }
     cJSON *jt = cJSON_GetObjectItem(root, "temperature");
@@ -771,7 +831,7 @@ static bool fetch_qweather(weather_info_t *wx, const app_config_t *cfg, int32_t 
                     cJSON *t = cJSON_GetObjectItem(c, "text");
                     cJSON *k = cJSON_GetObjectItem(c, "code");
                     if (t && t->valuestring) strlcpy(wx->dtext[i], t->valuestring, sizeof(wx->dtext[i]));
-                    if (k && k->valuestring) strlcpy(wx->dicon[i], qw_icon(k->valuestring), sizeof(wx->dicon[i]));
+                    if (k && k->valuestring) qw_icon(k->valuestring, wx->dicon[i], sizeof(wx->dicon[i]));
                 }
             }
         }

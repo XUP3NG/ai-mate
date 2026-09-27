@@ -22,8 +22,9 @@
 static const char *TAG_UI = "ui";
 
 extern const lv_font_t font_cjk_16;
-extern const lv_font_t font_wx_icon_36;
-extern const lv_font_t font_wx_icon_24;
+extern const lv_font_t font_qw_36;    /* QWeather Icons 36px: 当前天气 */
+extern const lv_font_t font_qw_24;    /* QWeather Icons 24px: 4 日预报 */
+extern const lv_font_t font_qw_16;    /* QWeather Icons 16px: 行内小图标 (空气质量) */
 extern const lv_font_t font_wx_num_36;
 
 /* ── 柱状图几何常量 (page 1) ── */
@@ -296,7 +297,7 @@ void ui_init(ui_elements_t *ui) {
      * (5×18=90px) 时左侧组止于 252, 右侧组起于 258, 仍不重叠。 */
     ui->wx_icon = label(ui->page_weather, 22, 26, 0);
     lv_obj_set_width(ui->wx_icon, LV_SIZE_CONTENT);
-    lv_obj_set_style_text_font(ui->wx_icon, &font_wx_icon_36, 0);
+    lv_obj_set_style_text_font(ui->wx_icon, &font_qw_36, 0);
     lv_label_set_text(ui->wx_icon, "");
 
     ui->wx_temp = label(ui->page_weather, 68, 30, 0);
@@ -326,7 +327,10 @@ void ui_init(ui_elements_t *ui) {
     ui->wx_feel = label(ui->page_weather, 180, 70, 96);
     lv_label_set_long_mode(ui->wx_feel, LV_LABEL_LONG_DOT);
 
-    ui->wx_aqi = label(ui->page_weather, 290, 70, 96);
+    /* 空气质量: 图标(air-quality) + 类别/数值, 图标代替"空气"两个字 */
+    ui->wx_aqi_icon = label(ui->page_weather, 290, 70, 18);
+    lv_obj_set_style_text_font(ui->wx_aqi_icon, &font_qw_16, 0);
+    ui->wx_aqi = label(ui->page_weather, 306, 70, 80);
     lv_obj_set_style_text_align(ui->wx_aqi, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_long_mode(ui->wx_aqi, LV_LABEL_LONG_DOT);
 
@@ -359,7 +363,7 @@ void ui_init(ui_elements_t *ui) {
 
             ui->wx_day_icon[i] = label(ui->page_weather, col_x[i], 172, 96);
             lv_obj_set_style_text_align(ui->wx_day_icon[i], LV_TEXT_ALIGN_CENTER, 0);
-            lv_obj_set_style_text_font(ui->wx_day_icon[i], &font_wx_icon_24, 0);
+            lv_obj_set_style_text_font(ui->wx_day_icon[i], &font_qw_24, 0);
 
             ui->wx_day_temp[i] = label(ui->page_weather, col_x[i], 200, 96);
             lv_obj_set_style_text_align(ui->wx_day_temp[i], LV_TEXT_ALIGN_CENTER, 0);
@@ -705,18 +709,20 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
                 b[0] = '\0';
             lv_label_set_text(ui->wx_feel, b);
 
-            /* 空气质量: 类别超过 2 字 (轻度污染…) 时只显示类别, 否则数值+类别 */
+            /* 空气质量: 图标代替"空气"二字; 类别超过 2 字 (轻度污染…) 时不带数值 */
             if (s->wx.aqi_valid) {
+                lv_label_set_text(ui->wx_aqi_icon, wx_aqi_icon());
                 if (s->wx.aqi_cat[0] && strlen(s->wx.aqi_cat) <= 6)
-                    snprintf(b, sizeof(b), "空气 %s %u", s->wx.aqi_cat, s->wx.aqi);
+                    snprintf(b, sizeof(b), "%s %u", s->wx.aqi_cat, s->wx.aqi);
                 else if (s->wx.aqi_cat[0])
-                    snprintf(b, sizeof(b), "空气 %s", s->wx.aqi_cat);
+                    snprintf(b, sizeof(b), "%s", s->wx.aqi_cat);
                 else
-                    snprintf(b, sizeof(b), "空气 %u", s->wx.aqi);
+                    snprintf(b, sizeof(b), "%u", s->wx.aqi);
+                lv_label_set_text(ui->wx_aqi, b);
             } else {
-                b[0] = '\0';
+                lv_label_set_text(ui->wx_aqi_icon, "");
+                lv_label_set_text(ui->wx_aqi, "");
             }
-            lv_label_set_text(ui->wx_aqi, b);
 
             /* 页眉右侧: 数据来源 + 更新时间 (和风条款要求标注来源) */
             uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
@@ -732,6 +738,7 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
             lv_label_set_text(ui->wx_desc, s->wx.err[0] ? s->wx.err : "查询中...");
             lv_label_set_text(ui->wx_hum, "");
             lv_label_set_text(ui->wx_feel, "");
+            lv_label_set_text(ui->wx_aqi_icon, "");
             lv_label_set_text(ui->wx_aqi, "");
             lv_label_set_text(ui->wx_meta, "");
         }
