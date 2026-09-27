@@ -70,6 +70,7 @@ typedef struct {
     lv_obj_t *wx_rain;             /* 降水摘要 (分钟级 summary) */
     lv_obj_t *wx_peak;             /* 峰值降水量 */
     lv_obj_t *wx_min_bar[WX_MIN_N];/* 分钟级降水柱 (24 格) */
+    lv_obj_t *wx_min_base;         /* 柱状图基线 */
     lv_obj_t *wx_axis[3];          /* 横轴: 现在 / +1小时 / +2小时 */
     lv_obj_t *wx_day[WX_DAYS];         /* 预报日期标签 (今天/明天/周X) */
     lv_obj_t *wx_day_icon[WX_DAYS];    /* 预报图标 (font_wx_icon_24) */

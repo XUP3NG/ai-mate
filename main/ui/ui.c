@@ -274,26 +274,31 @@ void ui_init(ui_elements_t *ui) {
 
     /* 页眉: 城市 + 数据源/更新时间 (和风条款要求标注来源) */
     ui->wx_city = label(ui->page_weather, 14, 4, 140);
+    lv_label_set_long_mode(ui->wx_city, LV_LABEL_LONG_DOT);
     ui->wx_meta = label(ui->page_weather, 154, 4, 232);
     lv_obj_set_style_text_align(ui->wx_meta, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_style_text_color(ui->wx_meta, c_dim(), 0);
+    lv_label_set_long_mode(ui->wx_meta, LV_LABEL_LONG_DOT);
 
-    /* 当前天气: 大图标 + 大号温度 */
+    /* 当前天气: 大图标 + 大号温度
+     * 度量对齐: icon_36 行高 36/基线 1, num_36 行高 28/基线 1
+     * 温度框 30..58 (视觉中心 44) == 图标框 26..62 (视觉中心 44) → 光学居中 */
     ui->wx_icon = label(ui->page_weather, 22, 26, 0);
     lv_obj_set_width(ui->wx_icon, LV_SIZE_CONTENT);
     lv_obj_set_style_text_font(ui->wx_icon, &font_wx_icon_36, 0);
     lv_label_set_text(ui->wx_icon, "");
 
-    ui->wx_temp = label(ui->page_weather, 104, 24, 0);
+    ui->wx_temp = label(ui->page_weather, 104, 30, 0);
     lv_obj_set_width(ui->wx_temp, LV_SIZE_CONTENT);
     lv_obj_set_style_text_font(ui->wx_temp, &font_wx_num_36, 0);
     lv_label_set_text(ui->wx_temp, "--");
 
-    ui->wx_unit = label(ui->page_weather, 0, 42, 0);
+    ui->wx_unit = label(ui->page_weather, 0, 40, 0);
     lv_obj_set_width(ui->wx_unit, LV_SIZE_CONTENT);
     lv_label_set_text(ui->wx_unit, "度");
 
     ui->wx_desc = label(ui->page_weather, 104, 70, 140);
+    lv_label_set_long_mode(ui->wx_desc, LV_LABEL_LONG_DOT);
     ui->wx_hum  = label(ui->page_weather, 250, 70, 136);
     lv_obj_set_style_text_align(ui->wx_hum, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_style_text_color(ui->wx_hum, c_dim(), 0);
@@ -303,12 +308,14 @@ void ui_init(ui_elements_t *ui) {
 
     /* 天气预警横幅: 黑底白字 (1-bit 下最强强调), 仅预警时显示 */
     ui->wx_alert_box = rect(ui->page_weather, 14, 100, DISPLAY_WIDTH - 28, 20, c_tx());
-    ui->wx_alert = label(ui->wx_alert_box, 6, 2, DISPLAY_WIDTH - 40);
+    ui->wx_alert = label(ui->wx_alert_box, 6, 1, DISPLAY_WIDTH - 40);
     lv_obj_set_style_text_color(ui->wx_alert, c_bg(), 0);
+    lv_label_set_long_mode(ui->wx_alert, LV_LABEL_LONG_DOT);
     lv_obj_add_flag(ui->wx_alert_box, LV_OBJ_FLAG_HIDDEN);
 
     /* 降水摘要 (和风分钟级 summary) + 峰值 */
     ui->wx_rain = label(ui->page_weather, 16, 126, 240);
+    lv_label_set_long_mode(ui->wx_rain, LV_LABEL_LONG_DOT);
     ui->wx_peak = label(ui->page_weather, 256, 126, 130);
     lv_obj_set_style_text_align(ui->wx_peak, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_style_text_color(ui->wx_peak, c_dim(), 0);
@@ -319,6 +326,7 @@ void ui_init(ui_elements_t *ui) {
         for (int i = 0; i < WX_DAYS; i++) {
             ui->wx_day[i] = label(ui->page_weather, col_x[i], 150, 96);
             lv_obj_set_style_text_align(ui->wx_day[i], LV_TEXT_ALIGN_CENTER, 0);
+            lv_label_set_long_mode(ui->wx_day[i], LV_LABEL_LONG_DOT);
 
             ui->wx_day_icon[i] = label(ui->page_weather, col_x[i], 172, 96);
             lv_obj_set_style_text_align(ui->wx_day_icon[i], LV_TEXT_ALIGN_CENTER, 0);
@@ -327,6 +335,7 @@ void ui_init(ui_elements_t *ui) {
             ui->wx_day_temp[i] = label(ui->page_weather, col_x[i], 200, 96);
             lv_obj_set_style_text_align(ui->wx_day_temp[i], LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_set_style_text_font(ui->wx_day_temp[i], &lv_font_montserrat_20, 0);
+            lv_label_set_long_mode(ui->wx_day_temp[i], LV_LABEL_LONG_DOT);
         }
     }
 
@@ -335,7 +344,7 @@ void ui_init(ui_elements_t *ui) {
         ui->wx_min_bar[i] = rect(ui->page_weather, 21 + i * 15, 247, 12, 1, c_tx());
         lv_obj_add_flag(ui->wx_min_bar[i], LV_OBJ_FLAG_HIDDEN);
     }
-    rect(ui->page_weather, 16, 248, DISPLAY_WIDTH - 32, 1, c_tx());   /* 基线 */
+    ui->wx_min_base = rect(ui->page_weather, 16, 248, DISPLAY_WIDTH - 32, 1, c_tx());
 
     ui->wx_axis[0] = label(ui->page_weather, 16, 252, 60);
     ui->wx_axis[1] = label(ui->page_weather, 170, 252, 60);
@@ -682,9 +691,10 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
             lv_label_set_text(ui->wx_peak, b);
         }
 
-        /* ── 未来 2 小时降水柱状图 (24 格 × 5 分钟) ── */
+        /* ── 未来 2 小时降水柱状图 (24 格 × 5 分钟) ──
+         * 柱区 228..247, 基线 248: 与上方温度行(200..222)留 6px 间距 */
         {
-            const int base_y = 248, max_h = 24;
+            const int base_y = 248, max_h = 20;
             bool show = s->wx.valid && s->wx.minutely.valid;
             for (int i = 0; i < WX_MIN_N; i++) {
                 int h = 0;
@@ -703,6 +713,9 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
                     lv_obj_add_flag(ui->wx_min_bar[i], LV_OBJ_FLAG_HIDDEN);
                 }
             }
+            if (show) lv_obj_remove_flag(ui->wx_min_base, LV_OBJ_FLAG_HIDDEN);
+            else      lv_obj_add_flag(ui->wx_min_base, LV_OBJ_FLAG_HIDDEN);
+
             lv_label_set_text(ui->wx_axis[0], show ? "现在" : "");
             lv_label_set_text(ui->wx_axis[1], show ? "+1小时" : "");
             lv_label_set_text(ui->wx_axis[2], show ? "+2小时" : "");
