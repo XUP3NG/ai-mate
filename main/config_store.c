@@ -13,6 +13,7 @@ void config_defaults(app_config_t *cfg) {
     cfg->poll_min = 5;
     cfg->wx_min = 30;       /* 天气刷新 30 分钟 (与轮询解耦, 省配额) */
     cfg->bat_div_x100 = 300; /* 默认分压比 3.00 */
+    cfg->bat_full_mv = 0;    /* 0 = 自动学习满电电压 */
 }
 
 /* ── WiFi 列表操作 ── */
@@ -82,6 +83,8 @@ bool config_load(app_config_t *cfg) {
     uint16_t u16 = 0;
     if (nvs_get_u16(h, "bdiv", &u16) == ESP_OK && u16 >= 100 && u16 <= 1000)
         cfg->bat_div_x100 = u16;
+    if (nvs_get_u16(h, "bfull", &u16) == ESP_OK && u16 <= 4200)
+        cfg->bat_full_mv = u16;
 
     /* WiFi 列表 */
     u8 = 0;
@@ -134,6 +137,7 @@ void config_save(const app_config_t *cfg) {
     nvs_set_u8(h, "pmin",  cfg->poll_min);
     nvs_set_u8(h, "wmin",  cfg->wx_min ? cfg->wx_min : 30);
     nvs_set_u16(h, "bdiv", cfg->bat_div_x100 ? cfg->bat_div_x100 : 300);
+    nvs_set_u16(h, "bfull", cfg->bat_full_mv);
 
     /* WiFi 列表 + 首选 */
     uint8_t n = cfg->net_count > CFG_NET_MAX ? CFG_NET_MAX : cfg->net_count;

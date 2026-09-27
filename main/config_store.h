@@ -49,6 +49,8 @@ typedef struct {
 
     /* ── 电池分压比 ×100 (默认 300 = 3.00; 用于校准电量显示) ── */
     uint16_t bat_div_x100;
+    /* ── 满电电压 mV (0 = 自动学习; 充满时屏上稳定的最高电压) ── */
+    uint16_t bat_full_mv;
 } app_config_t;
 
 void config_defaults(app_config_t *cfg);

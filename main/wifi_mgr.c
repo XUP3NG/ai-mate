@@ -351,12 +351,15 @@ static void build_portal_html(void) {
         "<label>轮询间隔 (分钟)</label><input name='pmin' value='%d'>"
         "<label>电池分压比 ×100 (默认 300=3.00; 电量显示偏差时校准, 留空不变)</label>"
         "<input name='bdiv' value='%u'>"
+        "<label>满电电压 mV (0=自动学习; 标准锂电池 4200, 若充满只到 4090 就填 4090)</label>"
+        "<input name='bfull' value='%u'>"
         "<button type='submit'>保存并重启</button>"
         "<p><small>智谱 org/project: 浏览器登录 bigmodel.cn/coding-plan → F12 → Network → "
         "找 quota/limit 请求头 bigmodel-organization / bigmodel-project</small></p>"
         "<p><small>电量不准时: 串口日志会打印 BAT pin=xxxmV; 用万用表量电池实际电压, "
         "分压比 = 实际电压 / pin 电压 (如量到 3.90V, pin 读数 1.30V → 填 300)</small></p>"
-        "</form></body></html>", s_cfg.poll_min, s_cfg.bat_div_x100 ? s_cfg.bat_div_x100 : 300);
+        "</form></body></html>", s_cfg.poll_min, s_cfg.bat_div_x100 ? s_cfg.bat_div_x100 : 300,
+        s_cfg.bat_full_mv);
 }
 
 static const char SAVED_HTML[] =
@@ -430,6 +433,9 @@ static esp_err_t portal_save(httpd_req_t *req) {
     form_field(body, "bdiv", tmp, sizeof(tmp));
     int bd = atoi(tmp);
     if (bd >= 100 && bd <= 1000) cfg.bat_div_x100 = (uint16_t)bd;
+    form_field(body, "bfull", tmp, sizeof(tmp));
+    int bf = atoi(tmp);
+    if (bf >= 0 && bf <= 4200) cfg.bat_full_mv = (uint16_t)bf;
     form_field(body, "wmin", tmp, sizeof(tmp));
     int wm = atoi(tmp);
     if (wm >= 5 && wm <= 240) cfg.wx_min = (uint8_t)wm;

@@ -21,12 +21,14 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
@@ -108,11 +110,58 @@ static uint8_t bat_pct_from_mv(uint32_t pack_mv) {
         uint16_t hi = SOC_CURVE[i].mv, lo = SOC_CURVE[i + 1].mv;
         if (pack_mv <= hi && pack_mv >= lo) {
             uint8_t phi = SOC_CURVE[i].pct, plo = SOC_CURVE[i + 1].pct;
+            uint32_t span = hi - lo;
             uint32_t num = (uint32_t)(pack_mv - lo) * (phi - plo);
-            return (uint8_t)(plo + num / (hi - lo));
+            return (uint8_t)(plo + (num + span / 2) / span);   /* 四舍五入到整百分比 */
         }
     }
     return 0;
+}
+
+/* 满电电压参考 (mV): 4.20V 为标准值; 但有些板子充电器稳压在 4.1V 左右,
+ * 或 ADC 读数偏低, 会导致永远显示不到 100%。故支持两种方式:
+ *   配置项 bat_full_mv > 0 → 用配置值
+ *   否则自动学习: 充电中电压稳定 ≥30 分钟 → 认定该电压为满电, 存 NVS */
+#define BAT_FULL_NVS_NS   "ai_mate"
+#define BAT_FULL_NVS_KEY  "bfull_learned"
+#define BAT_FULL_DEFAULT  4200
+#define BAT_FULL_STABLE_MV 2          /* 判定"稳定"的波动阈值 */
+#define BAT_FULL_STABLE_MS (30 * 60 * 1000)
+
+static uint16_t s_full_mv = BAT_FULL_DEFAULT;
+static bool     s_full_auto = true;
+static uint16_t s_plateau_mv = 0;
+static uint32_t s_plateau_ms = 0;
+
+static void bat_full_load(const app_config_t *cfg) {
+    if (cfg->bat_full_mv > 0) {                  /* 手动指定 */
+        s_full_mv = cfg->bat_full_mv;
+        s_full_auto = false;
+        ESP_LOGI(TAG, "battery full ref: %u mV (manual)", s_full_mv);
+        return;
+    }
+    s_full_auto = true;
+    nvs_handle_t h;
+    uint16_t learned = 0;
+    if (nvs_open(BAT_FULL_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u16(h, BAT_FULL_NVS_KEY, &learned);
+        nvs_close(h);
+    }
+    if (learned >= 3800 && learned <= BAT_FULL_DEFAULT) {
+        s_full_mv = learned;
+        ESP_LOGI(TAG, "battery full ref: %u mV (learned)", s_full_mv);
+    } else {
+        s_full_mv = BAT_FULL_DEFAULT;
+        ESP_LOGI(TAG, "battery full ref: %u mV (default, will learn)", s_full_mv);
+    }
+}
+
+static void bat_full_save(uint16_t mv) {
+    nvs_handle_t h;
+    if (nvs_open(BAT_FULL_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u16(h, BAT_FULL_NVS_KEY, mv);
+    nvs_commit(h);
+    nvs_close(h);
 }
 
 /* 读一次电池: 更新 s_state 的电压与电量 (分压比可配, 默认 3.00) */
@@ -129,7 +178,6 @@ static void bat_update(void) {
     else s_mv_ema = s_mv_ema * 0.7f + (float)pack_mv * 0.3f;
 
     s_state.battery_mv = (uint16_t)s_mv_ema;
-    s_state.battery_pct = bat_pct_from_mv((uint32_t)s_mv_ema);
 
     /* 充电判定: 满充电压, 或短时间内电压持续上升 (深放电时电压低但确在充电) */
     static uint32_t s_trend_t0 = 0;
@@ -150,11 +198,41 @@ static void bat_update(void) {
         s_trend_mv0 = (uint16_t)s_mv_ema;
     }
 
-    s_state.battery_charging = (s_mv_ema >= 4150.0f) || s_trend_charging;
+    bool charging = (s_mv_ema >= 4150.0f) || s_trend_charging;
+    s_state.battery_charging = charging;
 
-    ESP_LOGI(TAG, "BAT pin=%" PRIu32 "mV pack=%.0fmV pct=%u%%%s",
-             pin_mv, s_mv_ema, s_state.battery_pct,
-             s_state.battery_charging ? " (charging)" : "");
+    /* ── 自动学习满电电压 ──
+     * 充电器进入恒压阶段后电压会长时间纹丝不动 (这时"趋势在充电"已不成立),
+     * 因此判据不用 charging, 而是: 电压足够高(≥4.0V) 且 30 分钟内波动 ≤3mV。
+     * 这两种情形下该电压都代表"已充满": 要么充电器稳压于此, 要么刚充满静置。 */
+    if (s_full_auto && s_mv_ema >= 4000.0f) {
+        if (s_plateau_mv == 0 || abs((int)s_mv_ema - (int)s_plateau_mv) > 3) {
+            s_plateau_mv = (uint16_t)s_mv_ema;
+            s_plateau_ms = 0;
+        } else {
+            s_plateau_ms += 30000;                   /* 采样间隔 30s */
+            if (s_plateau_ms >= BAT_FULL_STABLE_MS &&
+                s_plateau_mv >= BAT_FULL_DEFAULT - 400 && s_plateau_mv < BAT_FULL_DEFAULT) {
+                s_full_mv = s_plateau_mv;
+                bat_full_save(s_full_mv);
+                ESP_LOGW(TAG, "battery full voltage learned: %u mV → 满电显示 100%%", s_full_mv);
+                s_plateau_ms = 0;
+            }
+        }
+    } else {
+        s_plateau_mv = 0;
+        s_plateau_ms = 0;
+    }
+
+    /* 电量: 按实际满电电压重标定后再查 OCV 表 (满电即 100%) */
+    uint32_t scaled = (s_full_mv > 0) ? (uint32_t)(s_mv_ema * BAT_FULL_DEFAULT / s_full_mv)
+                                      : (uint32_t)s_mv_ema;
+    s_state.battery_pct = bat_pct_from_mv(scaled);
+
+    ESP_LOGI(TAG, "BAT pin=%" PRIu32 "mV pack=%.0fmV pct=%u%% full=%umV%s%s",
+             pin_mv, s_mv_ema, s_state.battery_pct, s_full_mv,
+             s_full_auto ? "(auto)" : "(manual)",
+             s_state.battery_charging ? " charging" : "");
 }
 
 /* ── 查询任务 (方案B: 查完断网省电) ──
@@ -290,6 +368,7 @@ void app_main(void)
 
     s_state.net = NET_CONNECTING;
     net_query_init_time();
+    bat_full_load(&s_cfg);           /* 满电电压参考: 配置值或上次学到的 */
     net_hist_sync(&s_state);         /* 先把 NVS 历史读出来, 柱状图开机即有数据 */
     wifi_mgr_connect_best(&s_cfg);   /* 扫描并连接信号最好的已保存网络 */
 
