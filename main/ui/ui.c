@@ -425,7 +425,7 @@ static void fmt_md(char *b, size_t sz, int days_ago) {
 /* ── Update ── */
 void ui_update(ui_elements_t *ui, app_state_t *s) {
     if (!ui || !s) return;
-    char b[192], b2[64];
+    char b[192];
 
     /* ── TopBar ── */
     if (s->time_valid) {

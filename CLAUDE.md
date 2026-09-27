@@ -40,8 +40,24 @@ ESP32-S3 + RLCD 4.2" 反射式墨水屏（400×300，1-bit 黑白），**WiFi �
 充值检测: 两次快照间隔 <35min 且余额跳增 ≥8元 → 记为充值
 设备离线跨多天 → 中间天记 -1 (无数据)
 ```
-NVS `ai_hist`: `cents[63]`(分) `base` `dbase` `rechg` `lbal` `lepo` `wxlat` `wxlon` `wxcity2` `wxepo`
+NVS `ai_hist`: `cents[63]`(分) `base` `dbase` `rechg` `lbal` `lepo`（坐标键见"定位与坐标"）
 > 是设备观测值；当天首次轮询前的消耗无法计入。日期换算用 Howard Hinnant 算法（正反必须成对）。
+
+## 定位与坐标（位置跟着 WiFi 网络走）
+
+**位置按 SSID 永久绑定**，不再每日重查 IP（重查只会让 IP 库偶尔给个"邻居市"，城市名和天气跟着跳）。
+
+优先级：**本网络手填坐标 > 本网络城市名解析 > 本网络 IP 自动定位 > 全局手填坐标**
+
+- NVS `ai_hist`：键 `a{l,o,c,s}` + `fnv1a(ssid)` 8 位 hex（10 字符，NVS 键上限 15）；
+  全局兜底 `gml/gmo/gmc`（给以后新加的网络用）。旧键 `wxlat/wxlon/wxcity2/wxepo` 已废弃（残留无害）
+- 配网页（P1）可手填**纬度/经度**把位置钉死；勾"我所有已保存的 WiFi 都在同一地点"则写入全部网络 + 全局
+- 清空经纬度保存 = 删除绑定 → 回落 IP 自动定位
+- 改城市名会自动重新 geocode（比对绑定里存的城市名）
+- **`navigator.geolocation` 拿不到**：配网页是 `http://192.168.4.1`，私有 IP 的 HTTP **不是 secure context**
+  （Chrome 50 起 geolocation 只在安全上下文可用）→ 只能手动粘贴手机地图的坐标，或给门户上 HTTPS
+- 精度上限：免费 IP 库只到城市级（5~50km，移动/公司网络更差）；和风 current/daily/hourly 是 1~3km
+  网格插值，城市级够用；**只有分钟级降水吃精度**。要更准只能手填坐标（或外挂 GPS，室内基本无信号）
 
 ## 电池电量
 
@@ -113,3 +129,8 @@ ESP-IDF v5.5.4 @ `C:\esp\v5.5.4\esp-idf`，工具链 `C:\Espressif`，Python 环
 5. **不要在 esp_event 回调里做阻塞操作**（配网切换/扫描）→ 只置标志，主任务轮询执行
 6. **main 任务栈默认 3584 太小**：24 个 `wifi_ap_record_t`(≈110B) 放栈上会爆 → 已提到 6144 并改用静态缓冲
 7. **和风回 gzip**：需自行解压（puff），且 Key 走请求头而非 URL（避免错误日志泄漏）
+8. **配网页 HTML 缓冲**：`PORTAL_HTML_MAX` 要 8192（附近热点 `datalist` 最多 24 条 × 最长 32 字节 SSID
+   ≈ 1.2KB，静态文案 ≈ 3KB）。`append()` 溢出会**静默截断**，表单末尾被砍掉后浏览器仍能提交（自动补全标签），
+   故障表现为"某些字段莫名丢失"→ 已加 `portal html: N/M bytes` 日志 + 截断时 `ESP_LOGE`
+9. **`snprintf` + `%.4f` 触发 `-Werror=format-truncation`**：gcc 按 double 最坏情况（~316 字符）算，
+   任何小于 700 字节的缓冲都会编译失败 → 坐标一律用整数格式化（`%d.%04d`，见 `fmt_x1e4()`）

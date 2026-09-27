@@ -177,46 +177,157 @@ static void url_encode(const char *in, char *out, size_t sz) {
     out[o] = '\0';
 }
 
-/* ── 坐标缓存 (含来源与时间戳 与 城市名) ── */
+/* ── 位置绑定: 位置跟着 WiFi 网络走, 永久缓存 ──
+ *
+ * WiFi 是固定的 → 它所在的位置也是固定的, 所以定位结果按 SSID 永久记住,
+ * 不再"每天重查一次"(重查只会让 IP 库偶尔给个邻居市, 城市名和天气跟着跳)。
+ *
+ * 优先级: 本网络手填坐标 > 本网络城市名解析 > 本网络 IP 自动定位 > 全局手填坐标
+ * 存储: NVS ai_hist, 键 al/ao/ac/as + fnv1a(ssid) 8位hex (10 字符, NVS 上限 15);
+ *       全局手填用 gml/gmo/gmc (给尚未单独绑定的新网络兜底)。
+ */
 
-static bool coords_load(int32_t *lat, int32_t *lon, char *city, size_t citysz, int64_t *epo) {
+static uint32_t ssid_hash(const char *ssid) {
+    uint32_t h = 2166136261u;                       /* FNV-1a 32 */
+    for (const unsigned char *p = (const unsigned char *)ssid; *p; p++) {
+        h ^= *p;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static void loc_key(char *dst, size_t sz, char kind, const char *ssid) {
+    snprintf(dst, sz, "a%c%08x", kind, (unsigned)ssid_hash(ssid));
+}
+
+static bool loc_load_net(const char *ssid, wx_loc_t *out) {
+    if (!ssid || !ssid[0]) return false;
     nvs_handle_t h;
     if (nvs_open(WX_NS, NVS_READONLY, &h) != ESP_OK) return false;
-    bool ok = nvs_get_i32(h, "wxlat", lat) == ESP_OK &&
-              nvs_get_i32(h, "wxlon", lon) == ESP_OK;
-    if (ok && city) {
-        size_t csz = citysz;
-        if (nvs_get_str(h, "wxcity2", city, &csz) != ESP_OK) city[0] = '\0';
-    }
-    if (ok && epo) {
-        size_t esz = 8;
-        if (nvs_get_i64(h, "wxepo", epo) != ESP_OK) *epo = 0;
+
+    char k[16];
+    int32_t la = 0, lo = 0;
+    loc_key(k, sizeof(k), 'l', ssid);
+    bool ok = (nvs_get_i32(h, k, &la) == ESP_OK);
+    loc_key(k, sizeof(k), 'o', ssid);
+    ok = ok && (nvs_get_i32(h, k, &lo) == ESP_OK);
+    if (ok) {
+        memset(out, 0, sizeof(*out));
+        out->lat_x1e4 = la;
+        out->lon_x1e4 = lo;
+        size_t sz = sizeof(out->city);
+        loc_key(k, sizeof(k), 'c', ssid);
+        if (nvs_get_str(h, k, out->city, &sz) != ESP_OK) out->city[0] = '\0';
+        uint8_t src = WX_LOC_AUTO;
+        loc_key(k, sizeof(k), 's', ssid);
+        nvs_get_u8(h, k, &src);
+        out->src = src;
+        out->from_global = false;
     }
     nvs_close(h);
     return ok;
 }
 
-static void coords_save(int32_t lat, int32_t lon, const char *city) {
+static bool loc_load_global(wx_loc_t *out) {
+    nvs_handle_t h;
+    if (nvs_open(WX_NS, NVS_READONLY, &h) != ESP_OK) return false;
+    int32_t la = 0, lo = 0;
+    bool ok = (nvs_get_i32(h, "gml", &la) == ESP_OK) &&
+              (nvs_get_i32(h, "gmo", &lo) == ESP_OK);
+    if (ok) {
+        memset(out, 0, sizeof(*out));
+        out->lat_x1e4 = la;
+        out->lon_x1e4 = lo;
+        size_t sz = sizeof(out->city);
+        if (nvs_get_str(h, "gmc", out->city, &sz) != ESP_OK) out->city[0] = '\0';
+        out->src = WX_LOC_MANUAL;
+        out->from_global = true;
+    }
+    nvs_close(h);
+    return ok;
+}
+
+static void loc_save_net(const char *ssid, int32_t la, int32_t lo,
+                         const char *city, uint8_t src) {
+    if (!ssid || !ssid[0]) return;
     nvs_handle_t h;
     if (nvs_open(WX_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_i32(h, "wxlat", lat);
-    nvs_set_i32(h, "wxlon", lon);
-    if (city) nvs_set_str(h, "wxcity2", city);
-    nvs_set_i64(h, "wxepo", (int64_t)time(NULL));
+    char k[16];
+    loc_key(k, sizeof(k), 'l', ssid); nvs_set_i32(h, k, la);
+    loc_key(k, sizeof(k), 'o', ssid); nvs_set_i32(h, k, lo);
+    loc_key(k, sizeof(k), 'c', ssid); nvs_set_str(h, k, (city && city[0]) ? city : "");
+    loc_key(k, sizeof(k), 's', ssid); nvs_set_u8(h, k, src);
     nvs_commit(h);
     nvs_close(h);
 }
 
-void weather_coords_clear(void) {
+static void loc_erase_net(const char *ssid) {
+    if (!ssid || !ssid[0]) return;
     nvs_handle_t h;
-    if (nvs_open(WX_NS, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_erase_key(h, "wxlat");
-        nvs_erase_key(h, "wxlon");
-        nvs_erase_key(h, "wxcity2");
-        nvs_erase_key(h, "wxepo");
-        nvs_commit(h);
-        nvs_close(h);
+    if (nvs_open(WX_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    char k[16];
+    loc_key(k, sizeof(k), 'l', ssid); nvs_erase_key(h, k);
+    loc_key(k, sizeof(k), 'o', ssid); nvs_erase_key(h, k);
+    loc_key(k, sizeof(k), 'c', ssid); nvs_erase_key(h, k);
+    loc_key(k, sizeof(k), 's', ssid); nvs_erase_key(h, k);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void loc_save_global(int32_t la, int32_t lo, const char *city) {
+    nvs_handle_t h;
+    if (nvs_open(WX_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_i32(h, "gml", la);
+    nvs_set_i32(h, "gmo", lo);
+    nvs_set_str(h, "gmc", (city && city[0]) ? city : "");
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void loc_erase_global(void) {
+    nvs_handle_t h;
+    if (nvs_open(WX_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_erase_key(h, "gml");
+    nvs_erase_key(h, "gmo");
+    nvs_erase_key(h, "gmc");
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+bool wx_loc_peek(const char *ssid, wx_loc_t *out) {
+    memset(out, 0, sizeof(*out));
+    if (loc_load_net(ssid, out)) return true;
+    return loc_load_global(out);
+}
+
+void wx_loc_set_manual(const char *ssid, const app_config_t *cfg,
+                       int32_t la, int32_t lo, const char *city, bool all) {
+    if (all && cfg) {                               /* 所有已保存网络都在同一地点 */
+        for (int i = 0; i < cfg->net_count && i < CFG_NET_MAX; i++)
+            loc_save_net(cfg->net_ssid[i], la, lo, city, WX_LOC_MANUAL);
+        loc_save_global(la, lo, city);              /* 兜底: 以后新加的网络 */
+        if (ssid && ssid[0]) loc_save_net(ssid, la, lo, city, WX_LOC_MANUAL);
+    } else if (ssid && ssid[0]) {
+        loc_save_net(ssid, la, lo, city, WX_LOC_MANUAL);
+    } else {
+        loc_save_global(la, lo, city);              /* 没有当前网络 → 只能存全局 */
     }
+    ESP_LOGI(TAG, "manual location set: %.4f, %.4f (%s)", la / 10000.0, lo / 10000.0,
+             all ? "all networks" : (ssid && ssid[0] ? ssid : "global"));
+}
+
+void wx_loc_clear_manual(const char *ssid, const app_config_t *cfg, bool all) {
+    if (all && cfg) {
+        for (int i = 0; i < cfg->net_count && i < CFG_NET_MAX; i++) loc_erase_net(cfg->net_ssid[i]);
+        loc_erase_global();
+        if (ssid && ssid[0]) loc_erase_net(ssid);
+    } else if (ssid && ssid[0]) {
+        loc_erase_net(ssid);
+    } else {
+        loc_erase_global();
+    }
+    ESP_LOGI(TAG, "manual location cleared (%s)",
+             all ? "all networks" : (ssid && ssid[0] ? ssid : "global"));
 }
 
 /* ── 定位: IP (设备直连公网) 或 城市名 geocoding ── */
@@ -676,43 +787,60 @@ void weather_query(app_state_t *st, const app_config_t *cfg) {
         return;
     }
 
-    bool manual = cfg->wx_city[0] != '\0';
-    if (manual) strlcpy(st->wx.city, cfg->wx_city, sizeof(st->wx.city));
+    bool named = cfg->wx_city[0] != '\0';
+    if (named) strlcpy(st->wx.city, cfg->wx_city, sizeof(st->wx.city));
 
-    /* 坐标策略: 手动城市 → geocoding 一次永久缓存;
-     *          留空 → IP 自动定位, 缓存 24h 每日刷新 (换网络自动跟新) */
+    /* 坐标策略: 手填坐标(最高) > 城市名解析 > 本网络 IP 定位(永久) > 全局手填坐标 */
+    const char *ssid = wifi_mgr_current_ssid();
     int32_t lat = 0, lon = 0;
-    char cached_city[24] = "";
-    int64_t wxepo = 0;
-    bool have = coords_load(&lat, &lon, cached_city, sizeof(cached_city), &wxepo);
+    wx_loc_t loc;
+    bool have = false;
 
-    if (manual) {
-        if (!have) {
-            if (!geocode(cfg->wx_city, &lat, &lon)) {
-                strlcpy(st->wx.err, "城市未找到", sizeof(st->wx.err));
-                ESP_LOGW(TAG, "geocode failed for \"%s\"", cfg->wx_city);
-                return;
-            }
-            coords_save(lat, lon, cfg->wx_city);
-            ESP_LOGI(TAG, "geocoded \"%s\" -> %.4f, %.4f",
-                     cfg->wx_city, lat / 10000.0, lon / 10000.0);
-        }
-    } else {
-        int64_t age = (int64_t)time(NULL) - wxepo;
-        if (!have || age < 0 || age > 86400) {
-            char ipcity[24] = "";
-            if (!ip_locate(&lat, &lon, ipcity, sizeof(ipcity))) {
-                strlcpy(st->wx.err, "IP 定位失败", sizeof(st->wx.err));
-                ESP_LOGW(TAG, "ip locate failed");
-                return;
-            }
-            coords_save(lat, lon, ipcity);
-            ESP_LOGI(TAG, "ip-located -> %s (%.4f, %.4f)", ipcity, lat / 10000.0, lon / 10000.0);
-            strlcpy(st->wx.city, ipcity[0] ? ipcity : "自动定位", sizeof(st->wx.city));
-        } else if (st->wx.city[0] == '\0') {
-            strlcpy(st->wx.city, cached_city[0] ? cached_city : "自动定位", sizeof(st->wx.city));
+    if (loc_load_net(ssid, &loc)) {
+        if (loc.src == WX_LOC_MANUAL) {
+            have = true;                            /* 配网页手填 → 永远优先 */
+        } else if (named) {
+            /* 城市名模式: 名字没变就复用, 改了名字自动重新解析 */
+            have = (loc.src == WX_LOC_GEOC) && (strcmp(loc.city, cfg->wx_city) == 0);
+        } else if (loc.src == WX_LOC_AUTO) {
+            have = true;                            /* IP 结果永久有效, 不再每日重查 */
         }
     }
+    if (!have && loc_load_global(&loc)) have = true;
+
+    if (have) {
+        lat = loc.lat_x1e4;
+        lon = loc.lon_x1e4;
+        if (!named && loc.city[0]) strlcpy(st->wx.city, loc.city, sizeof(st->wx.city));
+        static const char *SRC[] = { "IP 自动", "城市名解析", "手填坐标" };
+        ESP_LOGI(TAG, "location cached: %.4f, %.4f (%s%s) ssid \"%s\"",
+                 lat / 10000.0, lon / 10000.0,
+                 SRC[loc.src < 3 ? loc.src : 0], loc.from_global ? ", 全局" : "",
+                 ssid ? ssid : "");
+    } else if (named) {
+        if (!geocode(cfg->wx_city, &lat, &lon)) {
+            strlcpy(st->wx.err, "城市未找到", sizeof(st->wx.err));
+            ESP_LOGW(TAG, "geocode failed for \"%s\"", cfg->wx_city);
+            return;
+        }
+        loc_save_net(ssid, lat, lon, cfg->wx_city, WX_LOC_GEOC);
+        ESP_LOGI(TAG, "geocoded \"%s\" -> %.4f, %.4f (ssid \"%s\")",
+                 cfg->wx_city, lat / 10000.0, lon / 10000.0, ssid ? ssid : "");
+    } else {
+        char ipcity[24] = "";
+        if (!ip_locate(&lat, &lon, ipcity, sizeof(ipcity))) {
+            strlcpy(st->wx.err, "IP 定位失败", sizeof(st->wx.err));
+            ESP_LOGW(TAG, "ip locate failed");
+            return;
+        }
+        loc_save_net(ssid, lat, lon, ipcity, WX_LOC_AUTO);
+        ESP_LOGI(TAG, "ip-located -> %s (%.4f, %.4f) ssid \"%s\" [已永久绑定]",
+                 ipcity, lat / 10000.0, lon / 10000.0, ssid ? ssid : "");
+        strlcpy(st->wx.city, ipcity[0] ? ipcity : "自动定位", sizeof(st->wx.city));
+    }
+
+    /* 手填坐标但没填城市名 → 用这个占位, 别显示成"未知位置" */
+    if (st->wx.city[0] == '\0') strlcpy(st->wx.city, "自定义位置", sizeof(st->wx.city));
 
     /* 选择数据源: 和风参数齐全则用和风, 否则 Open-Meteo */
     bool use_qw = cfg->qw_host[0] && cfg->qw_key[0];

@@ -263,7 +263,7 @@ static void form_field(const char *body, const char *name, char *out, size_t out
 
 /* ── 配网门户 ── */
 
-#define PORTAL_HTML_MAX 4096
+#define PORTAL_HTML_MAX 8192
 static char s_portal_html[PORTAL_HTML_MAX];
 
 static void append(char **p, size_t *left, const char *fmt, ...) {
@@ -276,6 +276,12 @@ static void append(char **p, size_t *left, const char *fmt, ...) {
     if ((size_t)n >= *left) { *left = 0; return; }
     *p += n;
     *left -= n;
+}
+
+/* 经纬度 ×10000 → "31.2304" (整数格式化, 避免 %.4f 触发 format-truncation) */
+static void fmt_x1e4(char *dst, size_t sz, int32_t v) {
+    int32_t a = (v < 0) ? -v : v;
+    snprintf(dst, sz, "%s%d.%04d", (v < 0) ? "-" : "", (int)(a / 10000), (int)(a % 10000));
 }
 
 /* 动态生成配网页: 附带附近热点列表 (<datalist>) 与已保存网络 */
@@ -337,14 +343,47 @@ static void build_portal_html(void) {
         "<label>API Key</label><input name='dkey' value=\"%s\" required>",
         s_cfg.dsk_key);
 
+    /* 当前网络已绑定的位置: 用于回填手填坐标 + 提示来源 */
+    const char *cur_ssid = s_cfg.last_ssid[0] ? s_cfg.last_ssid : s_cfg.net_ssid[0];
+    wx_loc_t cur;
+    bool have_cur = wx_loc_peek(cur_ssid, &cur);
+    const char *src_cn = !have_cur                ? "暂无, 首次查询时按 IP 自动定位"
+                       : cur.from_global          ? "全局手填坐标"
+                       : cur.src == WX_LOC_MANUAL ? "手填坐标"
+                       : cur.src == WX_LOC_GEOC   ? "城市名解析"
+                                                  : "IP 自动定位";
+    char latbuf[24] = "", lonbuf[24] = "", curbuf[256];
+    if (have_cur && cur.src == WX_LOC_MANUAL && !cur.from_global) {
+        fmt_x1e4(latbuf, sizeof(latbuf), cur.lat_x1e4);
+        fmt_x1e4(lonbuf, sizeof(lonbuf), cur.lon_x1e4);
+    }
+    if (have_cur) {
+        char slat[24], slon[24];
+        fmt_x1e4(slat, sizeof(slat), cur.lat_x1e4);
+        fmt_x1e4(slon, sizeof(slon), cur.lon_x1e4);
+        snprintf(curbuf, sizeof(curbuf), "位置已绑定到 WiFi \"%s\": %s, %s (%s), 永久有效",
+                 cur_ssid[0] ? cur_ssid : "?", slat, slon, src_cn);
+    } else {
+        snprintf(curbuf, sizeof(curbuf), "位置来源: %s", src_cn);
+    }
+
     append(&p, &left,
         "<h2 style='margin-top:22px'>天气 (选填)</h2>"
-        "<label>城市 (如 上海; 留空 = 按 IP 自动定位)</label><input name='wcity' value=\"%s\">"
+        "<label>城市名 (显示用, 如 上海; 留空 = 用定位得到的城市名)</label>"
+        "<input name='wcity' value=\"%s\">"
+        "<label>纬度 / 经度 (选填; 填了就固定用这个坐标, 清空 = 按 IP 自动定位)</label>"
+        "<input name='wlat' value=\"%s\" placeholder='31.2304' style='width:110px'>"
+        "<input name='wlon' value=\"%s\" placeholder='121.4737' style='width:110px'>"
+        "<label><input type='checkbox' name='wall' value='1' style='width:auto'>"
+        " 我所有已保存的 WiFi 都在同一地点 (会覆盖其他网络的位置)</label>"
+        "<p><small>坐标从哪来: 手机地图 (高德/百度/苹果) 长按落点 → 复制坐标。</small></p>"
+        "<p><small>%s</small></p>"
         "<label>和风 API Host (留空 = 用免费 Open-Meteo)</label>"
         "<input name='qwhost' value=\"%s\" placeholder='xxxxxx.qweatherapi.com'>"
         "<label>和风 API Key</label><input name='qwkey' value=\"%s\">"
         "<label>天气刷新间隔 (分钟, 5–240)</label><input name='wmin' value='%d'>",
-        s_cfg.wx_city, s_cfg.qw_host, s_cfg.qw_key, s_cfg.wx_min ? s_cfg.wx_min : 30);
+        s_cfg.wx_city, latbuf, lonbuf, curbuf, s_cfg.qw_host, s_cfg.qw_key,
+        s_cfg.wx_min ? s_cfg.wx_min : 30);
 
     append(&p, &left,
         "<h2 style='margin-top:22px'>其他</h2>"
@@ -360,6 +399,9 @@ static void build_portal_html(void) {
         "分压比 = 实际电压 / pin 电压 (如量到 3.90V, pin 读数 1.30V → 填 300)</small></p>"
         "</form></body></html>", s_cfg.poll_min, s_cfg.bat_div_x100 ? s_cfg.bat_div_x100 : 300,
         s_cfg.bat_full_mv);
+    ESP_LOGI(TAG, "portal html: %u/%u bytes", (unsigned)strlen(s_portal_html),
+             (unsigned)sizeof(s_portal_html));
+    if (left == 0) ESP_LOGE(TAG, "portal html TRUNCATED! 需要更大的 PORTAL_HTML_MAX");
 }
 
 static const char SAVED_HTML[] =
@@ -454,7 +496,30 @@ static esp_err_t portal_save(httpd_req_t *req) {
 
     httpd_resp_send(req, SAVED_HTML, HTTPD_RESP_USE_STRLEN);
     config_save(&cfg);
-    weather_coords_clear();      /* 更换网络/城市后重新定位 */
+
+    /* ── 位置绑定: 手填经纬度则钉死, 否则清掉手动值回落 IP 自动定位 ── */
+    char flat[24] = "", flon[24] = "";
+    form_field(body, "wlat", flat, sizeof(flat));
+    form_field(body, "wlon", flon, sizeof(flon));
+    bool wall = strstr(body, "wall=1") != NULL;
+    double dla = atof(flat), dlo = atof(flon);
+    bool have_coord = flat[0] && flon[0] &&
+                      dla >= -90.0 && dla <= 90.0 && dlo >= -180.0 && dlo <= 180.0 &&
+                      (dla != 0.0 || dlo != 0.0);
+    if (have_coord) {
+        const char *lbl = cfg.wx_city;
+        wx_loc_t prev;
+        if (!lbl[0] && wx_loc_peek(cfg.wifi_ssid, &prev) && prev.city[0]) lbl = prev.city;
+        wx_loc_set_manual(cfg.wifi_ssid, &cfg,
+                          (int32_t)(dla * 10000 + (dla < 0 ? -0.5 : 0.5)),
+                          (int32_t)(dlo * 10000 + (dlo < 0 ? -0.5 : 0.5)),
+                          lbl, wall);
+    } else if (flat[0] || flon[0]) {
+        ESP_LOGW(TAG, "portal: bad coordinate \"%s,%s\", ignored", flat, flon);
+    } else {
+        wx_loc_clear_manual(cfg.wifi_ssid, &cfg, wall);
+    }
+
     ESP_LOGI(TAG, "portal: saved (%d networks), restarting...", cfg.net_count);
     vTaskDelay(pdMS_TO_TICKS(800));
     esp_restart();
