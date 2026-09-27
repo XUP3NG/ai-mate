@@ -77,7 +77,11 @@ bool shtc3_init(void) {
         return false;
     }
 
-    /* 读 ID 确认芯片在位 (顺便验证 CRC 通路) */
+    /* 读 ID 确认芯片在位 (顺便验证 CRC 通路)
+     *
+     * 注意: 不能严格比对 datasheet 的 0x0807 —— 本板实测返回 **0x0887** (CRC 正确),
+     * 是 SHTC3 的兼容型号/批次, 测量命令与数据格式完全一致。只要 CRC 通过就采用,
+     * 否则会把一个完全正常的传感器判成"不在位"。 */
     uint8_t id[3] = { 0 };
     bool ok = false;
     if (shtc3_cmd(0x3517) == ESP_OK) {              /* wake */
@@ -86,9 +90,11 @@ bool shtc3_init(void) {
             i2c_master_receive(s_dev, id, sizeof(id), SHTC3_TIMEOUT_MS) == ESP_OK) {
             uint16_t v = (uint16_t)((id[0] << 8) | id[1]);
             bool crc_ok = (crc8(id, 2) == id[2]);
-            ok = crc_ok && (v == SHTC3_ID_EXPECT);
-            ESP_LOGI(TAG, "SHTC3 id=0x%04X crc=%s → %s", v, crc_ok ? "ok" : "BAD",
-                     ok ? "已就绪" : "型号不符");
+            ok = crc_ok;
+            if (!crc_ok)       ESP_LOGW(TAG, "ID CRC 校验失败 (id=0x%04X)", v);
+            else if (v == SHTC3_ID_EXPECT) ESP_LOGI(TAG, "SHTC3 id=0x%04X 已就绪", v);
+            else               ESP_LOGW(TAG, "id=0x%04X (标称 0x%04X, 兼容型号) → 按 SHTC3 协议使用",
+                                        v, SHTC3_ID_EXPECT);
         }
     }
     shtc3_cmd(0xB098);                              /* sleep */

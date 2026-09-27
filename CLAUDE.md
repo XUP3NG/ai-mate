@@ -142,3 +142,5 @@ ESP-IDF v5.5.4 @ `C:\esp\v5.5.4\esp-idf`，工具链 `C:\Espressif`，Python 环
    故障表现为"某些字段莫名丢失"→ 已加 `portal html: N/M bytes` 日志 + 截断时 `ESP_LOGE`
 9. **`snprintf` + `%.4f` 触发 `-Werror=format-truncation`**：gcc 按 double 最坏情况（~316 字符）算，
    任何小于 700 字节的缓冲都会编译失败 → 坐标一律用整数格式化（`%d.%04d`，见 `fmt_x1e4()`）
+10. **SHTC3 的 ID 不要严格比对**：本板实测 `id=0x0887`（CRC 正确），而 datasheet 标称 `0x0807`。
+    严格比对会把一个完全正常的传感器判成"不在位"→ 只校验 **CRC 通过** 即采用，型号不符仅告警
