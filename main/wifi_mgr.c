@@ -517,7 +517,15 @@ static esp_err_t portal_save(httpd_req_t *req) {
     } else if (flat[0] || flon[0]) {
         ESP_LOGW(TAG, "portal: bad coordinate \"%s,%s\", ignored", flat, flon);
     } else {
-        wx_loc_clear_manual(cfg.wifi_ssid, &cfg, wall);
+        /* 字段留空 = "不要手填坐标"。只在当前确实是手填值时才删绑定,
+         * 否则改个轮询间隔就会把 IP 自动绑定顺手冲掉, 下次查询重新定位(城市可能跳变)。*/
+        wx_loc_t prev;
+        bool is_manual = wx_loc_peek(cfg.wifi_ssid, &prev) && prev.src == WX_LOC_MANUAL;
+        if (wall || is_manual) {
+            wx_loc_clear_manual(cfg.wifi_ssid, &cfg, wall);
+        } else {
+            ESP_LOGI(TAG, "portal: 未填经纬度, 保留现有定位绑定");
+        }
     }
 
     ESP_LOGI(TAG, "portal: saved (%d networks), restarting...", cfg.net_count);
