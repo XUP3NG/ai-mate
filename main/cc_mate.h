@@ -79,6 +79,24 @@ typedef struct {
     int32_t  month_cents;
 } hist_info_t;
 
+/* ── 天气预警 (和风 weatheralert) ── */
+typedef struct {
+    bool     valid;                 /* 已成功获取 (含"无预警"的情况) */
+    uint8_t  count;                 /* 生效预警条数 */
+    bool     severe;                /* 橙/红/黑色 → 反白强调 */
+    char     title[40];             /* 如 "大风蓝色预警" */
+} wx_alert_t;
+
+/* ── 分钟级降水 (和风 minutely, 未来 2 小时 × 5 分钟 = 24 格) ── */
+#define WX_MIN_N 24
+
+typedef struct {
+    bool     valid;
+    uint8_t  bar[WX_MIN_N];         /* 归一化柱高 0..100 */
+    uint16_t peak_x100;             /* 峰值 (mm/5min × 100) */
+    char     summary[40];           /* 和风自然语言, 如 "95分钟后雨就停了" */
+} wx_minutely_t;
+
 /* ── 天气 (Open-Meteo 免 Key / 和风天气 需 Key, 双源) ── */
 #define WX_DAYS 4
 
@@ -100,6 +118,8 @@ typedef struct {
     uint8_t  rain_prob;             /* 窗口内最大降水概率 % */
     char     rain_icon[8];
     char     rain_text[48];         /* 如 "2小时后有雨 (68%)" / "未来6小时无降水" */
+    wx_alert_t    alert;            /* 天气预警 (和风) */
+    wx_minutely_t minutely;         /* 分钟级降水 (和风) */
     uint32_t last_ok_ms;
     char     err[48];
 } weather_info_t;

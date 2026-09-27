@@ -249,15 +249,18 @@ void ui_init(ui_elements_t *ui) {
 
     /* ════ Page 3: 天气 ════
      *
-     *  ┌ 无锡市 ───────────────────── 更新 2 分钟前 ┐   y=8
-     *  │  ☁(36)      27.0 度                        │   y=34..72
-     *  │              阴            湿度 64%         │   y=78
-     *  ├────────────────────────────────────────────┤   y=104
-     *  │  今天      明天      周三      周四          │   y=136
-     *  │   ☁        ☂        ☀        ☀            │   y=162 (24px)
-     *  │  30/22    28/20    31/21    32/22          │   y=200 (20px)
-     *  │  Open-Meteo                                │   y=250
-     *  └────────────────────────────────────────────┘
+     *  ┌ 无锡市 ─────────────── 和风天气 · 更新2分钟前 ┐   y=4
+     *  │  ☁(36)      27.0 度                            │   y=26..62
+     *  │              阴             湿度 64%            │   y=70
+     *  ├────────────────────────────────────────────────┤   y=94
+     *  │ ▌大风蓝色预警▐   ← 反白横幅, 仅预警时显示        │   y=100..120
+     *  │ ☔ 95分钟后雨就停了          峰值 0.4mm/5min     │   y=126
+     *  │  今天      明天      周三      周四              │   y=150
+     *  │   ☁        ☂        ☀        ☀                │   y=172 (24px)
+     *  │  30/22    28/20    31/21    32/22              │   y=200 (20px)
+     *  │  ▁▃▅█▅▃▁▁▁▁▁  ← 未来2小时降水 (24格×5分钟)      │   y=224..248
+     *  │ 现在          +1小时          +2小时            │   y=252
+     *  └────────────────────────────────────────────────┘
      */
     ui->page_weather = lv_obj_create(scr);
     lv_obj_set_size(ui->page_weather, DISPLAY_WIDTH, DISPLAY_HEIGHT - 24);
@@ -269,60 +272,81 @@ void ui_init(ui_elements_t *ui) {
     lv_obj_remove_flag(ui->page_weather, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(ui->page_weather, LV_OBJ_FLAG_HIDDEN);
 
-    ui->wx_city = label(ui->page_weather, 14, 6, 200);
-    ui->wx_meta = label(ui->page_weather, 214, 6, 172);
+    /* 页眉: 城市 + 数据源/更新时间 (和风条款要求标注来源) */
+    ui->wx_city = label(ui->page_weather, 14, 4, 140);
+    ui->wx_meta = label(ui->page_weather, 154, 4, 232);
     lv_obj_set_style_text_align(ui->wx_meta, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_style_text_color(ui->wx_meta, c_dim(), 0);
 
     /* 当前天气: 大图标 + 大号温度 */
-    ui->wx_icon = label(ui->page_weather, 22, 30, 0);
+    ui->wx_icon = label(ui->page_weather, 22, 26, 0);
     lv_obj_set_width(ui->wx_icon, LV_SIZE_CONTENT);
     lv_obj_set_style_text_font(ui->wx_icon, &font_wx_icon_36, 0);
     lv_label_set_text(ui->wx_icon, "");
 
-    ui->wx_temp = label(ui->page_weather, 104, 28, 0);
+    ui->wx_temp = label(ui->page_weather, 104, 24, 0);
     lv_obj_set_width(ui->wx_temp, LV_SIZE_CONTENT);
     lv_obj_set_style_text_font(ui->wx_temp, &font_wx_num_36, 0);
     lv_label_set_text(ui->wx_temp, "--");
 
-    ui->wx_unit = label(ui->page_weather, 0, 46, 0);
+    ui->wx_unit = label(ui->page_weather, 0, 42, 0);
     lv_obj_set_width(ui->wx_unit, LV_SIZE_CONTENT);
     lv_label_set_text(ui->wx_unit, "度");
 
-    ui->wx_desc = label(ui->page_weather, 104, 78, 140);
-    ui->wx_hum  = label(ui->page_weather, 250, 78, 136);
+    ui->wx_desc = label(ui->page_weather, 104, 70, 140);
+    ui->wx_hum  = label(ui->page_weather, 250, 70, 136);
     lv_obj_set_style_text_align(ui->wx_hum, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_style_text_color(ui->wx_hum, c_dim(), 0);
 
     /* 分隔线 */
-    {
-        lv_obj_t *sep = rect(ui->page_weather, 14, 104, DISPLAY_WIDTH - 28, 1, c_tx());
-        (void)sep;
-    }
+    rect(ui->page_weather, 14, 94, DISPLAY_WIDTH - 28, 1, c_tx());
 
-    /* 未来几小时降水提醒 (逐小时预报推算) */
-    ui->wx_rain = label(ui->page_weather, 16, 110, 372);
+    /* 天气预警横幅: 黑底白字 (1-bit 下最强强调), 仅预警时显示 */
+    ui->wx_alert_box = rect(ui->page_weather, 14, 100, DISPLAY_WIDTH - 28, 20, c_tx());
+    ui->wx_alert = label(ui->wx_alert_box, 6, 2, DISPLAY_WIDTH - 40);
+    lv_obj_set_style_text_color(ui->wx_alert, c_bg(), 0);
+    lv_obj_add_flag(ui->wx_alert_box, LV_OBJ_FLAG_HIDDEN);
+
+    /* 降水摘要 (和风分钟级 summary) + 峰值 */
+    ui->wx_rain = label(ui->page_weather, 16, 126, 240);
+    ui->wx_peak = label(ui->page_weather, 256, 126, 130);
+    lv_obj_set_style_text_align(ui->wx_peak, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_style_text_color(ui->wx_peak, c_dim(), 0);
 
     /* 4 列预报 */
     {
         int col_x[WX_DAYS] = { 8, 104, 200, 296 };   /* 每列 96 宽, 内容居中 */
         for (int i = 0; i < WX_DAYS; i++) {
-            ui->wx_day[i] = label(ui->page_weather, col_x[i], 134, 96);
+            ui->wx_day[i] = label(ui->page_weather, col_x[i], 150, 96);
             lv_obj_set_style_text_align(ui->wx_day[i], LV_TEXT_ALIGN_CENTER, 0);
 
-            ui->wx_day_icon[i] = label(ui->page_weather, col_x[i], 160, 96);
+            ui->wx_day_icon[i] = label(ui->page_weather, col_x[i], 172, 96);
             lv_obj_set_style_text_align(ui->wx_day_icon[i], LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_set_style_text_font(ui->wx_day_icon[i], &font_wx_icon_24, 0);
 
-            ui->wx_day_temp[i] = label(ui->page_weather, col_x[i], 196, 96);
+            ui->wx_day_temp[i] = label(ui->page_weather, col_x[i], 200, 96);
             lv_obj_set_style_text_align(ui->wx_day_temp[i], LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_set_style_text_font(ui->wx_day_temp[i], &lv_font_montserrat_20, 0);
         }
     }
 
-    ui->wx_footer = label(ui->page_weather, 14, 240, 372);
-    lv_obj_set_style_text_color(ui->wx_footer, c_dim(), 0);
-    lv_label_set_text(ui->wx_footer, "");
+    /* 未来 2 小时降水柱状图 (24 格 × 5 分钟) */
+    for (int i = 0; i < WX_MIN_N; i++) {
+        ui->wx_min_bar[i] = rect(ui->page_weather, 21 + i * 15, 247, 12, 1, c_tx());
+        lv_obj_add_flag(ui->wx_min_bar[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    rect(ui->page_weather, 16, 248, DISPLAY_WIDTH - 32, 1, c_tx());   /* 基线 */
+
+    ui->wx_axis[0] = label(ui->page_weather, 16, 252, 60);
+    ui->wx_axis[1] = label(ui->page_weather, 170, 252, 60);
+    lv_obj_set_style_text_align(ui->wx_axis[1], LV_TEXT_ALIGN_CENTER, 0);
+    ui->wx_axis[2] = label(ui->page_weather, 324, 252, 60);
+    lv_obj_set_style_text_align(ui->wx_axis[2], LV_TEXT_ALIGN_RIGHT, 0);
+    for (int i = 0; i < 3; i++)
+        lv_obj_set_style_text_color(ui->wx_axis[i], c_dim(), 0);
+    lv_label_set_text(ui->wx_axis[0], "");
+    lv_label_set_text(ui->wx_axis[1], "");
+    lv_label_set_text(ui->wx_axis[2], "");
 
     /* ════ Page 2: 配网提示 ════ */
     ui->page_portal = lv_obj_create(scr);
@@ -596,13 +620,6 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
     {
         lv_label_set_text(ui->wx_city, s->wx.city[0] ? s->wx.city : "定位中...");
 
-        /* 数据来源标注 (和风条款要求注明来源) */
-        if (s->wx.src[0])
-            snprintf(b, sizeof(b), "数据源 %s", s->wx.src);
-        else
-            snprintf(b, sizeof(b), "数据源 Open-Meteo");
-        lv_label_set_text(ui->wx_footer, b);
-
         if (s->wx.valid) {
             lv_label_set_text(ui->wx_icon, s->wx.icon);
 
@@ -614,10 +631,12 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
             snprintf(b, sizeof(b), "湿度 %d%%", s->wx.humidity);
             lv_label_set_text(ui->wx_hum, b);
 
+            /* 页眉右侧: 数据来源 + 更新时间 (和风条款要求标注来源) */
             uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
             uint32_t mins = (now - s->wx.last_ok_ms) / 60000;
-            if (mins == 0) snprintf(b, sizeof(b), "刚刚更新");
-            else snprintf(b, sizeof(b), "更新于 %" PRIu32 " 分钟前", mins);
+            const char *src = s->wx.src[0] ? s->wx.src : "Open-Meteo";
+            if (mins == 0) snprintf(b, sizeof(b), "%s · 刚刚更新", src);
+            else snprintf(b, sizeof(b), "%s · 更新 %" PRIu32 " 分钟前", src, mins);
             lv_label_set_text(ui->wx_meta, b);
         } else {
             lv_label_set_text(ui->wx_icon, "");
@@ -628,15 +647,65 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
             lv_label_set_text(ui->wx_meta, "");
         }
 
-        /* 未来几小时降水提醒 */
-        if (s->wx.valid && s->wx.rain_valid) {
-            if (s->wx.rain_icon[0])
-                snprintf(b, sizeof(b), "%s %s", s->wx.rain_icon, s->wx.rain_text);
+        /* ── 天气预警横幅 (黑底白字, 最强制) ── */
+        if (s->wx.valid && s->wx.alert.valid && s->wx.alert.title[0]) {
+            if (s->wx.alert.count > 1)
+                snprintf(b, sizeof(b), "%s%s   (+%u 条)",
+                         s->wx.alert.severe ? "! " : "",
+                         s->wx.alert.title, (unsigned)(s->wx.alert.count - 1));
             else
-                snprintf(b, sizeof(b), "%s", s->wx.rain_text);
-            lv_label_set_text(ui->wx_rain, b);
+                snprintf(b, sizeof(b), "%s%s",
+                         s->wx.alert.severe ? "! " : "", s->wx.alert.title);
+            lv_label_set_text(ui->wx_alert, b);
+            lv_obj_remove_flag(ui->wx_alert_box, LV_OBJ_FLAG_HIDDEN);
         } else {
-            lv_label_set_text(ui->wx_rain, "");
+            lv_obj_add_flag(ui->wx_alert_box, LV_OBJ_FLAG_HIDDEN);
+        }
+
+        /* ── 降水摘要: 优先用和风分钟级 summary, 否则用逐小时推算 ── */
+        {
+            bool has = false;
+            if (s->wx.valid && s->wx.minutely.valid && s->wx.minutely.summary[0]) {
+                snprintf(b, sizeof(b), "☔ %s", s->wx.minutely.summary);
+                has = true;
+            } else if (s->wx.valid && s->wx.rain_valid) {
+                if (s->wx.rain_icon[0]) snprintf(b, sizeof(b), "%s %s", s->wx.rain_icon, s->wx.rain_text);
+                else snprintf(b, sizeof(b), "%s", s->wx.rain_text);
+                has = true;
+            }
+            lv_label_set_text(ui->wx_rain, has ? b : "");
+
+            if (s->wx.valid && s->wx.minutely.valid && s->wx.minutely.peak_x100 > 5)
+                snprintf(b, sizeof(b), "峰值 %.2f mm/5min", s->wx.minutely.peak_x100 / 100.0);
+            else
+                b[0] = '\0';
+            lv_label_set_text(ui->wx_peak, b);
+        }
+
+        /* ── 未来 2 小时降水柱状图 (24 格 × 5 分钟) ── */
+        {
+            const int base_y = 248, max_h = 24;
+            bool show = s->wx.valid && s->wx.minutely.valid;
+            for (int i = 0; i < WX_MIN_N; i++) {
+                int h = 0;
+                if (show) {
+                    int v = s->wx.minutely.bar[i];
+                    if (v > 0) {
+                        h = v * max_h / 100;
+                        if (h < 2) h = 2;          /* 有降水至少 2px 可见 */
+                    }
+                }
+                if (h > 0) {
+                    lv_obj_set_pos(ui->wx_min_bar[i], 21 + i * 15, base_y - h);
+                    lv_obj_set_size(ui->wx_min_bar[i], 12, h);
+                    lv_obj_remove_flag(ui->wx_min_bar[i], LV_OBJ_FLAG_HIDDEN);
+                } else {
+                    lv_obj_add_flag(ui->wx_min_bar[i], LV_OBJ_FLAG_HIDDEN);
+                }
+            }
+            lv_label_set_text(ui->wx_axis[0], show ? "现在" : "");
+            lv_label_set_text(ui->wx_axis[1], show ? "+1小时" : "");
+            lv_label_set_text(ui->wx_axis[2], show ? "+2小时" : "");
         }
 
         /* 4 列预报 */

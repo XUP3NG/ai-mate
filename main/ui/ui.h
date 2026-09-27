@@ -65,11 +65,15 @@ typedef struct {
     lv_obj_t *wx_unit;             /* "度" */
     lv_obj_t *wx_desc;             /* 天气文字 */
     lv_obj_t *wx_hum;              /* 湿度 */
-    lv_obj_t *wx_rain;             /* 未来几小时降水提醒 */
+    lv_obj_t *wx_alert_box;        /* 预警横幅 (黑底) */
+    lv_obj_t *wx_alert;            /* 预警文字 (白字) */
+    lv_obj_t *wx_rain;             /* 降水摘要 (分钟级 summary) */
+    lv_obj_t *wx_peak;             /* 峰值降水量 */
+    lv_obj_t *wx_min_bar[WX_MIN_N];/* 分钟级降水柱 (24 格) */
+    lv_obj_t *wx_axis[3];          /* 横轴: 现在 / +1小时 / +2小时 */
     lv_obj_t *wx_day[WX_DAYS];         /* 预报日期标签 (今天/明天/周X) */
     lv_obj_t *wx_day_icon[WX_DAYS];    /* 预报图标 (font_wx_icon_24) */
     lv_obj_t *wx_day_temp[WX_DAYS];    /* 预报高低温 (montserrat_20) */
-    lv_obj_t *wx_footer;               /* 数据源 */
 
     /* ── Page 2: 配网提示 ── */
     lv_obj_t *page_portal;

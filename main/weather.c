@@ -31,6 +31,41 @@ static const char *TAG = "wx";
 static char s_buf[WX_BUF];       /* 接收缓冲 (可能是 gzip) */
 static char s_dec[WX_BUF];       /* 解码后的 JSON (zlib 解压输出) */
 
+/* ── 预警等级 ── */
+static const char *alert_color_cn(const char *code) {
+    if (!code) return "";
+    if (!strcmp(code, "red"))    return "红色";
+    if (!strcmp(code, "orange")) return "橙色";
+    if (!strcmp(code, "yellow")) return "黄色";
+    if (!strcmp(code, "blue"))   return "蓝色";
+    if (!strcmp(code, "black"))  return "黑色";
+    if (!strcmp(code, "white"))  return "白色";
+    if (!strcmp(code, "green"))  return "绿色";
+    if (!strcmp(code, "gray"))   return "灰色";
+    if (!strcmp(code, "purple")) return "紫色";
+    if (!strcmp(code, "amber"))  return "琥珀色";
+    return "";
+}
+
+/* 颜色 → 严重度排序 (用于多条预警时选最严重的一条) */
+static int alert_rank(const char *color, const char *severity) {
+    int r = 1;
+    if (color) {
+        if (!strcmp(color, "red"))         r = 6;
+        else if (!strcmp(color, "black"))  r = 6;
+        else if (!strcmp(color, "purple")) r = 5;
+        else if (!strcmp(color, "orange")) r = 4;
+        else if (!strcmp(color, "yellow")) r = 3;
+        else if (!strcmp(color, "blue"))   r = 2;
+    }
+    if (severity) {
+        if (!strcmp(severity, "extreme"))      { if (r < 6) r = 6; }
+        else if (!strcmp(severity, "severe"))  { if (r < 4) r = 4; }
+        else if (!strcmp(severity, "moderate")){ if (r < 3) r = 3; }
+    }
+    return r;
+}
+
 /* ── 未来几小时降水提醒 ──
  * 用逐小时预报推算: 窗口内首个"有降水或概率≥50%"的小时数。
  * 两数据源各自填好 hour_wx_t 后调用 rain_eval()。
@@ -377,6 +412,111 @@ static bool fetch_openmeteo(weather_info_t *wx, int32_t lat, int32_t lon) {
     return ok;
 }
 
+/* ── 天气预警 (和风) ── */
+static void fetch_qw_alert(weather_info_t *wx, const app_config_t *cfg, int32_t lat, int32_t lon) {
+    char url[224];
+    snprintf(url, sizeof(url), "https://%s/weatheralert/v1/current/%.2f/%.2f?lang=zh",
+             cfg->qw_host, lat / 10000.0, lon / 10000.0);
+
+    int n = net_https_get_ex(url, NULL, NULL, NULL, cfg->qw_key, s_buf, sizeof(s_buf));
+    if (n <= 0) return;
+    int dl = net_http_body_decode(s_buf, n, s_dec, sizeof(s_dec));
+    if (dl <= 0) return;
+
+    cJSON *root = cJSON_Parse(s_dec);
+    if (!root) {
+        ESP_LOGW(TAG, "qw alert: JSON 解析失败, body[%d]: %.160s", dl, s_dec);
+        return;
+    }
+
+    wx->alert.valid = true;                       /* 拿到响应即视为有效 (可为"无预警") */
+    cJSON *alerts = cJSON_GetObjectItem(root, "alerts");
+    if (!cJSON_IsArray(alerts)) { cJSON_Delete(root); return; }
+
+    int cnt = cJSON_GetArraySize(alerts);
+    if (cnt <= 0) { cJSON_Delete(root); return; }
+
+    /* 选最严重的一条作为横幅内容 */
+    int best_rank = -1;
+    const char *best_name = NULL, *best_color = NULL;
+    for (int i = 0; i < cnt; i++) {
+        cJSON *a = cJSON_GetArrayItem(alerts, i);
+        if (!a) continue;
+        cJSON *et = cJSON_GetObjectItem(a, "eventType");
+        cJSON *col = cJSON_GetObjectItem(a, "color");
+        cJSON *sev = cJSON_GetObjectItem(a, "severity");
+        cJSON *jnm = et ? cJSON_GetObjectItem(et, "name") : NULL;
+        cJSON *jcc = col ? cJSON_GetObjectItem(col, "code") : NULL;
+        const char *nm = (jnm && jnm->valuestring) ? jnm->valuestring : NULL;
+        const char *cc = (jcc && jcc->valuestring) ? jcc->valuestring : NULL;
+        const char *sv = (sev && sev->valuestring) ? sev->valuestring : NULL;
+        int r = alert_rank(cc, sv);
+        if (r > best_rank) {
+            best_rank = r;
+            best_name = nm ? nm : "天气";
+            best_color = cc ? cc : "";
+        }
+    }
+
+    wx->alert.count = (uint8_t)(cnt > 99 ? 99 : cnt);
+    wx->alert.severe = (best_rank >= 4);          /* 橙及以上 → 反白强调 */
+    snprintf(wx->alert.title, sizeof(wx->alert.title), "%s%s预警",
+             best_name ? best_name : "天气", alert_color_cn(best_color));
+    cJSON_Delete(root);
+
+    ESP_LOGW(TAG, "alert: %s (共 %u 条, %s)", wx->alert.title,
+             wx->alert.count, wx->alert.severe ? "严重" : "一般");
+}
+
+/* ── 分钟级降水 (和风, 未来 2 小时) ── */
+static void fetch_qw_minutely(weather_info_t *wx, const app_config_t *cfg, int32_t lat, int32_t lon) {
+    char url[224];
+    snprintf(url, sizeof(url), "https://%s/v7/minutely/5m?location=%.2f,%.2f&lang=zh",
+             cfg->qw_host, lon / 10000.0, lat / 10000.0);
+
+    int n = net_https_get_ex(url, NULL, NULL, NULL, cfg->qw_key, s_buf, sizeof(s_buf));
+    if (n <= 0) return;
+    int dl = net_http_body_decode(s_buf, n, s_dec, sizeof(s_dec));
+    if (dl <= 0) return;
+
+    cJSON *root = cJSON_Parse(s_dec);
+    if (!root) {
+        ESP_LOGW(TAG, "qw minutely: JSON 解析失败, body[%d]: %.160s", dl, s_dec);
+        return;
+    }
+
+    cJSON *sum = cJSON_GetObjectItem(root, "summary");
+    if (sum && sum->valuestring)
+        strlcpy(wx->minutely.summary, sum->valuestring, sizeof(wx->minutely.summary));
+
+    cJSON *arr = cJSON_GetObjectItem(root, "minutely");
+    if (cJSON_IsArray(arr)) {
+        int cnt = cJSON_GetArraySize(arr);
+        if (cnt > WX_MIN_N) cnt = WX_MIN_N;
+
+        /* 先取峰值, 再归一化 */
+        double vals[WX_MIN_N];
+        double peak = 0;
+        for (int i = 0; i < cnt; i++) {
+            cJSON *e = cJSON_GetArrayItem(arr, i);
+            cJSON *p = e ? cJSON_GetObjectItem(e, "precip") : NULL;
+            vals[i] = (p && p->valuestring) ? atof(p->valuestring) : 0;
+            if (vals[i] > peak) peak = vals[i];
+        }
+        wx->minutely.peak_x100 = (uint16_t)(peak * 100 + 0.5);
+        double scale = peak > 0.05 ? peak : 0.05;      /* 极小值也给个底, 避免噪声满格 */
+        for (int i = 0; i < WX_MIN_N; i++) {
+            double v = (i < cnt) ? vals[i] : 0;
+            int h = (int)(v / scale * 100.0 + 0.5);
+            wx->minutely.bar[i] = (uint8_t)(h > 100 ? 100 : h);
+        }
+        wx->minutely.valid = true;
+        ESP_LOGI(TAG, "minutely: \"%s\", 24 格峰值 %.2f mm/5min",
+                 wx->minutely.summary, peak);
+    }
+    cJSON_Delete(root);
+}
+
 /* ── 数据源 2: 和风天气 (API Host + API Key) ── */
 
 static bool fetch_qweather(weather_info_t *wx, const app_config_t *cfg, int32_t lat, int32_t lon) {
@@ -518,6 +658,11 @@ static bool fetch_qweather(weather_info_t *wx, const app_config_t *cfg, int32_t 
     }
 
     cJSON_Delete(root);
+
+    /* 预警 + 分钟级降水 (和风独有, 失败不影响主数据) */
+    fetch_qw_alert(wx, cfg, lat, lon);
+    fetch_qw_minutely(wx, cfg, lat, lon);
+
     strlcpy(wx->src, "和风天气", sizeof(wx->src));
     if (!ok) strlcpy(wx->err, "和风: 无预报数据", sizeof(wx->err));
     return ok;
