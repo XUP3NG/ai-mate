@@ -304,6 +304,9 @@ void art_init(app_state_t *st) {
     }
 
     art_load_stored(st);
+    /* 关键: ui_init / 首次 ui_update 跑在本函数之前, 那时画布还是空的(全白);
+     * 加载完必须 +1 让 UI 知道要重绘, 否则画布永远停在开机时的白屏 */
+    s_rev++;
     ESP_LOGI(TAG, "art: %s (done_day=%ld ver=%ld/%d)", st->art.valid ? "loaded" : "empty",
              (long)s_day, (long)s_ver, ART_PROMPT_VER);
 }

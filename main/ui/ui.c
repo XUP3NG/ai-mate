@@ -17,6 +17,9 @@
 #include <inttypes.h>
 #include <time.h>
 #include "esp_timer.h"
+#include "esp_log.h"
+
+static const char *TAG_UI = "ui";
 
 extern const lv_font_t font_cjk_16;
 extern const lv_font_t font_wx_icon_36;
@@ -434,11 +437,14 @@ void ui_init(ui_elements_t *ui) {
     lv_obj_add_flag(ui->page_art, LV_OBJ_FLAG_HIDDEN);
 
     ui->art_buf = heap_caps_malloc(ART_W * ART_H * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    if (!ui->art_buf)
+        ESP_LOGE(TAG_UI, "每日一图画布分配失败 (%d 字节)", (int)(ART_W * ART_H * sizeof(uint16_t)));
     if (ui->art_buf) {
         memset(ui->art_buf, 0xFF, ART_W * ART_H * sizeof(uint16_t));   /* 先铺白 */
         ui->art_canvas = lv_canvas_create(ui->page_art);
         lv_canvas_set_buffer(ui->art_canvas, ui->art_buf, ART_W, ART_H, LV_COLOR_FORMAT_RGB565);
         lv_obj_set_pos(ui->art_canvas, 0, 4);
+        ESP_LOGI(TAG_UI, "art canvas ready buf=%p", ui->art_buf);
     }
 
     ui->art_title = label(ui->page_art, 8, 256, 384);
@@ -863,6 +869,8 @@ void ui_update(ui_elements_t *ui, app_state_t *s) {
                     drow[x] = (srow[x >> 3] & (0x80 >> (x & 7))) ? 0x0000 : 0xFFFF;
             }
             lv_obj_invalidate(ui->art_canvas);
+            ESP_LOGI(TAG_UI, "art canvas redrawn rev=%d (中心像素 %04X, 首像素 %04X)",
+                     s_art_rev, dst[124 * ART_W + 200], dst[0]);
         }
         if (s->art.valid)
             snprintf(b, sizeof(b), "%s · Bing 每日壁纸", s->art.title);
