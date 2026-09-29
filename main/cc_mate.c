@@ -403,13 +403,15 @@ void app_main(void)
     /* 主循环: 页面轮播 + 定期刷新 */
     uint32_t last_bat = 0, last_ui = 0, page_start = 0;
     int page = 0;
+    static int s_shown_page = -1;
 
     while (1) {
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
 
-        /* WiFi 状态: 连接 > 射频休眠 > 连接中 */
+        /* WiFi 状态: 连接 > 射频休眠 > 配网 > 连接中 */
         if (net_query_wifi_ok()) s_state.net = NET_CONNECTED;
         else if (!wifi_mgr_radio_on()) s_state.net = NET_RADIO_SLEEP;
+        else if (wifi_mgr_portal_active()) s_state.net = NET_PORTAL;
         else s_state.net = NET_CONNECTING;
 
         /* 当前 SSID (状态栏显示) */
@@ -417,11 +419,32 @@ void app_main(void)
 
         /* 事件回调请求的配网切换 (在主任务执行, 回调内不可阻塞) */
         if (wifi_mgr_poll_portal()) {
-            /* 不会到达: portal 常驻直至保存重启 */
+            /* start_portal 现在不阻塞, 立即返回; 门户由 httpd 任务维持 */
         }
 
-        /* 断线重试耗尽 → 扫描换用其他已保存网络 (阻塞 ~2s) */
+        /* 断线重试耗尽 → 扫描换用其他已保存网络; 扫不到按 30s 退避重试 */
         wifi_mgr_poll_rescan();
+
+        /* 配网模式: 固定显示配网页(不轮播); 超过 10 分钟无人操作 →
+         * 重启重新尝试已保存的网络 (搬到新环境后自动找回连接的关键) */
+        if (wifi_mgr_portal_active()) {
+            if (wifi_mgr_portal_timeout()) {
+                ESP_LOGW(TAG, "portal idle >10min, restart to retry saved networks");
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                esp_restart();
+            }
+        } else {
+            /* 页面轮播: 每 15s 切换 主页/柱状图/天气/像素画 */
+            if (now - page_start > 15000) {
+                static const int order[] = { 0, 1, 3, 4 };   /* 0=主页 1=柱状图 3=天气 4=像素画 (2=配网不参与轮播) */
+                page = (page + 1) % 4;
+                page_start = now;
+                lvgl_port_lock(-1);
+                ui_show_page(&s_ui, order[page]);
+                s_shown_page = order[page];
+                lvgl_port_unlock();
+            }
+        }
 
         /* 电池: 每 30s, 且只在射频关闭时采 (WiFi 发射会拉低电压, 影响 OCV 判读) */
         if (now - last_bat > 30000 && !wifi_mgr_radio_on()) {
@@ -430,19 +453,13 @@ void app_main(void)
             last_bat = now;
         }
 
-        /* 页面轮播: 每 15s 切换 主页/柱状图/天气/像素画 */
-        if (now - page_start > 15000) {
-            static const int order[] = { 0, 1, 3, 4 };   /* 0=主页 1=柱状图 3=天气 4=像素画 (2=配网不参与轮播) */
-            page = (page + 1) % 4;
-            page_start = now;
-            lvgl_port_lock(-1);
-            ui_show_page(&s_ui, order[page]);
-            lvgl_port_unlock();
-        }
-
         /* UI: 每 2s (省电; 时钟分钟级, 无需更快) */
-        if (now - last_ui > 2000) {
+        if (now - last_ui > 2000 || s_shown_page == 2) {
             lvgl_port_lock(-1);
+            if (wifi_mgr_portal_active() && s_shown_page != 2) {
+                ui_show_page(&s_ui, 2);
+                s_shown_page = 2;
+            }
             ui_update(&s_ui, &s_state);
             lvgl_port_unlock();
             last_ui = now;

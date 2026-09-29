@@ -18,6 +18,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
@@ -37,11 +38,19 @@ static int      s_retry_count = 0;
 static bool     s_got_ip = false;
 static bool     s_started = false;
 static bool     s_auto_connect = false;    /* STA_START 时是否自动连当前配置 */
-static bool     s_tried_rescan = false;    /* 本轮是否已尝试换网 */
 static char     s_current_ssid[33];
 static volatile bool s_need_portal = false;
 static volatile bool s_need_rescan = false;
 static volatile bool s_radio_off = false;
+
+/* 换网/重试状态机: 重试耗尽后按 30s 退避周期重扫, 连续 3 轮扫不到才进配网,
+ * 且配网 10 分钟无人操作会自动重启重试 —— 保证"搬到新环境"能自动找回网络,
+ * 不再像旧版那样一次扫描失败就永久卡死在配网/待连接。 */
+static int      s_fail_rounds = 0;         /* 连续"扫不到已保存网络"轮数 */
+static int32_t  s_next_rescan_ms = 0;      /* 下次重扫时刻 (ms) */
+static bool     s_portal_active = false;   /* 配网门户运行中 */
+static int32_t  s_portal_start_ms = 0;
+static int32_t  s_portal_touch_ms = 0;     /* 最近一次有人访问配网页 */
 
 /* 配网页用的扫描结果缓存 (切到 AP 模式后无法再扫) */
 static wifi_ap_record_t s_ap_cache[SCAN_MAX_AP];
@@ -129,7 +138,6 @@ void wifi_mgr_connect_best(const app_config_t *cfg) {
     s_started = true;
     esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
     s_retry_count = 0;
-    s_tried_rescan = false;
     s_current_ssid[0] = '\0';
 
     /* 优先扫已知热点; 扫不到就退回 last_ssid 直连 (可能只是暂时不在范围内) */
@@ -149,6 +157,10 @@ bool wifi_mgr_radio_on(void) { return !s_radio_off; }
 
 void wifi_mgr_radio_sleep(void) {
     if (s_radio_off) return;
+    if (s_portal_active) {           /* 配网门户运行中: 关射频会把 AP 一起杀掉 */
+        ESP_LOGW(TAG, "portal active, skip radio sleep");
+        return;
+    }
     s_radio_off = true;
     s_got_ip = false;
     s_retry_count = 0;
@@ -161,7 +173,6 @@ void wifi_mgr_radio_wake(void) {
     if (!s_radio_off) return;
     s_radio_off = false;
     s_retry_count = 0;
-    s_tried_rescan = false;
     s_auto_connect = true;           /* 直接用上次配置重连, 省去扫描 */
     ESP_ERROR_CHECK(esp_wifi_start());
     s_started = true;
@@ -179,19 +190,36 @@ bool wifi_mgr_poll_portal(void) {
     return true;   /* 不会到达 */
 }
 
-/* 主任务调用: 重试耗尽后扫描换用其他已保存网络 */
+/* 主任务调用: 重试耗尽后扫描换用其他已保存网络; 扫不到按 30s 退避重试,
+ * 连续 3 轮扫不到才进配网门户 —— "搬到新环境"时最多一两分钟就能自动找回网络 */
 void wifi_mgr_poll_rescan(void) {
-    if (!s_need_rescan) return;
+    if (s_portal_active) return;                 /* 配网中不做 STA 扫描 */
+
+    int32_t now = (int32_t)(esp_timer_get_time() / 1000);
+    if (!s_need_rescan) {
+        /* 周期重试: 之前扫不到, 到点再试 (设备被移动后很快就能找回新环境的网络) */
+        if (s_got_ip || s_radio_off || !s_started || s_fail_rounds == 0) return;
+        if (now < s_next_rescan_ms) return;
+        s_need_rescan = true;
+    }
     s_need_rescan = false;
     if (s_got_ip || s_radio_off || !s_started) return;
 
     ESP_LOGW(TAG, "retries exhausted, looking for another saved network...");
     if (scan_and_connect_known(s_current_ssid)) {
-        s_tried_rescan = true;        /* 已换网; 再失败就直接进配网 */
-    } else {
-        ESP_LOGE(TAG, "no other saved network, requesting portal");
-        wifi_mgr_request_portal();
+        s_fail_rounds = 0;
+        return;
     }
+
+    s_fail_rounds++;
+    if (s_fail_rounds < 3) {
+        s_next_rescan_ms = now + 30000;          /* 30s 后再试一轮 */
+        ESP_LOGW(TAG, "no saved network in range (%d/3), retry in 30s", s_fail_rounds);
+        return;
+    }
+    ESP_LOGE(TAG, "no saved network reachable, entering portal");
+    s_fail_rounds = 0;
+    wifi_mgr_request_portal();
 }
 
 /* ── 事件 ── */
@@ -209,16 +237,15 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
             esp_wifi_connect();
             s_retry_count++;
             ESP_LOGW(TAG, "retry %d/%d (reason=%d)", s_retry_count, RETRY_PER_NET, reason);
-        } else if (!s_tried_rescan) {
-            s_need_rescan = true;                /* 交给主任务扫描换网 */
         } else {
-            ESP_LOGE(TAG, "all known networks failed, requesting portal");
-            wifi_mgr_request_portal();
+            /* 重试耗尽 → 交给主任务扫描换网/周期重试;
+             * 连续 3 轮扫不到才进配网 (由 poll_rescan 计数) */
+            s_need_rescan = true;
         }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *evt = (ip_event_got_ip_t *)data;
         s_retry_count = 0;
-        s_tried_rescan = false;
+        s_fail_rounds = 0;
         s_got_ip = true;
         ESP_LOGI(TAG, "got ip " IPSTR " on \"%s\"", IP2STR(&evt->ip_info.ip), s_current_ssid);
     }
@@ -420,6 +447,7 @@ static const char ERR_HTML[] =
 "</body></html>";
 
 static esp_err_t portal_root(httpd_req_t *req) {
+    s_portal_touch_ms = (int32_t)(esp_timer_get_time() / 1000);   /* 有人访问, 别自动重启 */
     build_portal_html();
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, s_portal_html, HTTPD_RESP_USE_STRLEN);
@@ -543,6 +571,8 @@ void wifi_mgr_start_portal(app_config_t *cfg) {
     s_cfg = local;                       /* 供配网页回填与扫描 */
 
     ESP_LOGW(TAG, "=== AP 配网模式 ===");
+    s_portal_active = true;
+    s_portal_start_ms = s_portal_touch_ms = (int32_t)(esp_timer_get_time() / 1000);
 
     /* 切 AP 前先在 STA 模式扫一次, 结果缓存供配网页列出附近热点 */
     if (s_radio_off) {                  /* 休眠中: 临时开射频扫描 */
@@ -582,8 +612,18 @@ void wifi_mgr_start_portal(app_config_t *cfg) {
         }
     }
 
-    /* 门户常驻, 等待保存后 esp_restart() */
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
+    /* 门户常驻: httpd 在自己的任务里跑, 本函数**直接返回**, 不再阻塞主任务
+     * (旧版在这里 while(1) 卡死主任务, 屏幕冻结、状态栏停在"待连接",
+     *  随后 net_task 的 radio_sleep 还会把配网 AP 一起杀掉)。
+     * 超过 10 分钟无人访问 → 主任务调用 wifi_mgr_portal_timeout() 自动重启,
+     * 重新尝试已保存的网络。 */
+}
+
+bool wifi_mgr_portal_active(void) { return s_portal_active; }
+
+/* 门户开启超过 10 分钟, 且最近 10 分钟无人访问 → 自动重启重试已保存网络 */
+bool wifi_mgr_portal_timeout(void) {
+    if (!s_portal_active) return false;
+    int32_t now = (int32_t)(esp_timer_get_time() / 1000);
+    return (now - s_portal_start_ms > 600000) && (now - s_portal_touch_ms > 600000);
 }
