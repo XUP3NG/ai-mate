@@ -396,6 +396,17 @@ void app_main(void)
         ESP_LOGW(TAG, "bootstrap: 已加入网络 \"%s\"", BOOTSTRAP_SSID);
     }
 #endif
+#ifdef BOOTSTRAP_COPY_LOC_FROM
+    /* 现场引导: 新网络的经纬度复制自已保存的老网络 (已是手填坐标则不动) */
+    {
+        wx_loc_t cur;
+        bool manual = wx_loc_peek(BOOTSTRAP_SSID, &cur) && cur.src == WX_LOC_MANUAL;
+        if (!manual && wx_loc_copy(BOOTSTRAP_COPY_LOC_FROM, BOOTSTRAP_SSID)) {
+            ESP_LOGW(TAG, "bootstrap: \"%s\" 坐标已复制自 \"%s\"",
+                     BOOTSTRAP_SSID, BOOTSTRAP_COPY_LOC_FROM);
+        }
+    }
+#endif
 
     if (!configured) {
         ESP_LOGW(TAG, "no config → portal");

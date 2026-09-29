@@ -42,8 +42,11 @@ void wx_loc_set_manual(const char *ssid, const app_config_t *cfg,
                        int32_t lat_x1e4, int32_t lon_x1e4,
                        const char *city, bool all);
 
-/* 配网页: 清除手填经纬度 → 回落 IP 自动定位; all=true 清除所有网络 + 全局 */
+/* 清空经纬度保存 = 删除绑定 → 回落 IP 自动定位; all=true 清除所有网络 + 全局 */
 void wx_loc_clear_manual(const char *ssid, const app_config_t *cfg, bool all);
+
+/* 把 from 网络的坐标绑定复制给 to 网络 (标记为手填, 不会再被覆盖) */
+bool wx_loc_copy(const char *from_ssid, const char *to_ssid);
 
 /* WMO 天气码 → 中文描述 */
 const char *wmo_text(uint8_t code);

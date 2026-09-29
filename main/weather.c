@@ -214,6 +214,21 @@ static void qw_icon(const char *code, char *out, size_t sz) {
     wx_icon_utf8(qw_cp(atoi(code ? code : "0")), out, sz);
 }
 
+/* 前向声明 (定义在下方"位置绑定"一节) */
+static bool loc_load_net(const char *ssid, wx_loc_t *out);
+static void loc_save_net(const char *ssid, int32_t la, int32_t lo,
+                         const char *city, uint8_t src);
+
+bool wx_loc_copy(const char *from_ssid, const char *to_ssid) {
+    wx_loc_t loc;
+    if (!from_ssid || !to_ssid || !loc_load_net(from_ssid, &loc)) return false;
+    loc_save_net(to_ssid, loc.lat_x1e4, loc.lon_x1e4,
+                 loc.city[0] ? loc.city : "未知", WX_LOC_MANUAL);
+    ESP_LOGI(TAG, "location copied: \"%s\" → \"%s\" (%.4f, %.4f)",
+             from_ssid, to_ssid, loc.lat_x1e4 / 10000.0, loc.lon_x1e4 / 10000.0);
+    return true;
+}
+
 const char *wx_aqi_icon(void) {
     static char out[4];
     wx_icon_utf8(QW_ICON_AIRQ, out, sizeof(out));
