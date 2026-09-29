@@ -35,3 +35,6 @@ Thumbs.db
 
 # 杩愯浜х墿
 monitor_out.txt
+
+# 本地引导网络 (含密码, 不入库)
+main/wifi_bootstrap.local.h

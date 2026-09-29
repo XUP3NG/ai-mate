@@ -21,6 +21,15 @@
 #include "rlcd_display.h"
 #include "esp_lvgl_port.h"
 
+/* 可选的本地引导网络: 若存在 main/wifi_bootstrap.local.h (已 gitignore),
+ * 启动时自动把里面的 SSID/密码加进已保存列表 —— 现场换网不用掏手机配网 */
+#if defined(__has_include)
+#if __has_include("wifi_bootstrap.local.h")
+#include "wifi_bootstrap.local.h"
+#define HAS_WIFI_BOOTSTRAP 1
+#endif
+#endif
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -378,6 +387,15 @@ void app_main(void)
     /* WiFi / 配网 */
     wifi_mgr_init();
     bool configured = config_load(&s_cfg);
+
+#ifdef HAS_WIFI_BOOTSTRAP
+    /* 现场引导: 列表里没有就加入并落盘 (已存在则无操作) */
+    if (!config_net_find(&s_cfg, BOOTSTRAP_SSID)) {
+        config_net_add(&s_cfg, BOOTSTRAP_SSID, BOOTSTRAP_PASS);
+        config_save(&s_cfg);
+        ESP_LOGW(TAG, "bootstrap: 已加入网络 \"%s\"", BOOTSTRAP_SSID);
+    }
+#endif
 
     if (!configured) {
         ESP_LOGW(TAG, "no config → portal");
