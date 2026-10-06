@@ -139,21 +139,46 @@ static uint8_t bat_pct_from_mv(uint32_t pack_mv) {
 #define BAT_FULL_STABLE_MV 2          /* 判定"稳定"的波动阈值 */
 #define BAT_FULL_STABLE_MS (30 * 60 * 1000)
 
+/* ── 空电锚点 (0%) ──
+ * 查表曲线的底部写死 3300mV, 但设备实际在 ~3.4V (带载欠压) 就断电了,
+ * 表底永远达不到 → 濒临关机时还显示 5~8%, 用户被误导。
+ * 学习法: 记录见过的最低 EMA (只在射频关闭时采 → 已弛豫 ≈ 该负载下的 OCV),
+ * 作为这台设备的真实 0% 锚点。只有真正深放过 (<3450mV) 才采纳 ——
+ * 平时 20-30% 就充电的用户不会被误锚定。 */
+#define BAT_EMPTY_NVS_KEY  "bempty_learned"
+#define BAT_EMPTY_DEFAULT  3300
+#define BAT_EMPTY_ZONE_MV  3450      /* 低于此值才算"临终区" */
+#define BAT_EMPTY_MIN_MV   3100      /* 采纳下限 (数据异常保护) */
+
 static uint16_t s_full_mv = BAT_FULL_DEFAULT;
 static bool     s_full_auto = true;
 static bool     s_full_ever = false;      /* 是否已学到过满电参考 (首次学习不受"只升"限制) */
 static uint16_t s_plateau_mv = 0;
 static uint32_t s_plateau_ms = 0;
+static uint16_t s_empty_mv = BAT_EMPTY_DEFAULT;
+static bool     s_empty_ever = false;     /* 是否已学到空电锚点 */
 
 static void bat_full_load(const app_config_t *cfg) {
+    /* 空电锚点: 无论满电是手动还是自动, 都参与学习 */
+    nvs_handle_t h;
+    uint16_t learned_e = 0;
+    if (nvs_open(BAT_FULL_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u16(h, BAT_EMPTY_NVS_KEY, &learned_e);
+        nvs_close(h);
+    }
+    if (learned_e >= BAT_EMPTY_MIN_MV && learned_e <= BAT_EMPTY_ZONE_MV) {
+        s_empty_mv = learned_e;
+        s_empty_ever = true;
+    }
+
     if (cfg->bat_full_mv > 0) {                  /* 手动指定 */
         s_full_mv = cfg->bat_full_mv;
         s_full_auto = false;
-        ESP_LOGI(TAG, "battery full ref: %u mV (manual)", s_full_mv);
+        ESP_LOGI(TAG, "battery full ref: %u mV (manual), empty ref: %u mV%s",
+                 s_full_mv, s_empty_mv, s_empty_ever ? "(learned)" : "(default)");
         return;
     }
     s_full_auto = true;
-    nvs_handle_t h;
     uint16_t learned = 0;
     if (nvs_open(BAT_FULL_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
         nvs_get_u16(h, BAT_FULL_NVS_KEY, &learned);
@@ -173,6 +198,14 @@ static void bat_full_save(uint16_t mv) {
     nvs_handle_t h;
     if (nvs_open(BAT_FULL_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
     nvs_set_u16(h, BAT_FULL_NVS_KEY, mv);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void bat_empty_save(uint16_t mv) {
+    nvs_handle_t h;
+    if (nvs_open(BAT_FULL_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u16(h, BAT_EMPTY_NVS_KEY, mv);
     nvs_commit(h);
     nvs_close(h);
 }
@@ -259,7 +292,35 @@ static void bat_update(void) {
         if (d > 120.0f)    soc_mv -= 60.0f;
         else if (d > 0.0f) soc_mv -= d / 2.0f;
     }
-    uint32_t scaled = (uint32_t)(soc_mv * BAT_FULL_DEFAULT / s_full_mv);
+
+    /* ── 空电锚点记录: 临终区 (<3450mV) 持续刷新最低值 ──
+     * NVS 按 ≥25mV 台阶写 (临终一段最多几次, 不伤 flash);
+     * NVS 掉电安全: 写一半断电的条目会被校验丢弃。 */
+    static uint16_t s_empty_min = 0;                  /* 本会话最低 EMA */
+    if (s_mv_ema < BAT_EMPTY_ZONE_MV && s_mv_ema >= BAT_EMPTY_MIN_MV) {
+        if (!s_empty_min || s_mv_ema < s_empty_min) s_empty_min = (uint16_t)s_mv_ema;
+        if (!s_empty_ever || s_empty_min < s_empty_mv - 25) {
+            s_empty_mv = s_empty_min;
+            s_empty_ever = true;
+            bat_empty_save(s_empty_mv);
+            ESP_LOGW(TAG, "battery empty anchor learned: %u mV → 该电压=0%%", s_empty_mv);
+        }
+    }
+
+    /* ── SoC 查表: 两端锚点仿射重标定 ──
+     * 把 [空电锚点 .. 满电锚点] 线性映射到查表区间 [3300..4200]。
+     * 旧的"只缩放顶部"在平台区读数偏乐观; 两端锚定后 0% = 设备真正断电的电压,
+     * 100% = 学到的满电平台。中段形状仍是通用曲线 (无电流计学不了, 已知妥协)。 */
+    uint16_t tbl_lo = SOC_CURVE[SOC_N - 1].mv;        /* 3300 */
+    uint16_t tbl_hi = SOC_CURVE[0].mv;                /* 4200 */
+    uint32_t e_mv = s_empty_ever ? s_empty_mv : BAT_EMPTY_DEFAULT;
+    uint32_t span = (uint32_t)s_full_mv - e_mv;
+    if (span < 500) {                                 /* 数据异常 → 退回默认跨度 */
+        e_mv = BAT_EMPTY_DEFAULT;
+        span = tbl_hi - tbl_lo;
+    }
+    uint32_t rel = (soc_mv > e_mv) ? ((uint32_t)soc_mv - e_mv) : 0;
+    uint32_t scaled = tbl_lo + rel * (tbl_hi - tbl_lo) / span;
     uint8_t raw_pct = bat_pct_from_mv(scaled);
 
     /* ── 显示百分比: 限速 + 100% 锁存 ──
@@ -288,8 +349,8 @@ static void bat_update(void) {
     }
     s_state.battery_pct = s_pct_disp;
 
-    ESP_LOGI(TAG, "BAT pin=%" PRIu32 "mV pack=%.0fmV pct=%u%%(raw %u) full=%umV%s%s",
-             pin_mv, s_mv_ema, s_state.battery_pct, raw_pct, s_full_mv,
+    ESP_LOGI(TAG, "BAT pin=%" PRIu32 "mV pack=%.0fmV pct=%u%%(raw %u) full=%umV empty=%umV%s%s",
+             pin_mv, s_mv_ema, s_state.battery_pct, raw_pct, s_full_mv, s_empty_mv,
              s_full_auto ? "(auto)" : "(manual)",
              charging ? " charging" : "");
 }
