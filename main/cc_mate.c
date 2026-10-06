@@ -141,6 +141,7 @@ static uint8_t bat_pct_from_mv(uint32_t pack_mv) {
 
 static uint16_t s_full_mv = BAT_FULL_DEFAULT;
 static bool     s_full_auto = true;
+static bool     s_full_ever = false;      /* 是否已学到过满电参考 (首次学习不受"只升"限制) */
 static uint16_t s_plateau_mv = 0;
 static uint32_t s_plateau_ms = 0;
 
@@ -160,6 +161,7 @@ static void bat_full_load(const app_config_t *cfg) {
     }
     if (learned >= 3800 && learned <= BAT_FULL_DEFAULT) {
         s_full_mv = learned;
+        s_full_ever = true;
         ESP_LOGI(TAG, "battery full ref: %u mV (learned)", s_full_mv);
     } else {
         s_full_mv = BAT_FULL_DEFAULT;
@@ -190,7 +192,11 @@ static void bat_update(void) {
 
     s_state.battery_mv = (uint16_t)s_mv_ema;
 
-    /* 充电判定: 满充电压, 或短时间内电压持续上升 (深放电时电压低但确在充电) */
+    /* 充电判定 (三条依据任一成立):
+     *   1. 端电压 ≥ 4150mV (大电流 CC 段)
+     *   2. 10 分钟内 EMA 涨 ≥15mV (深放电时电压低但确在充)
+     *   3. 端电压顶在满电参考附近 (恒压平台 —— 这时趋势已平, 但仍在充/刚充满;
+     *      放电撑不住该电压, 不会误判) */
     static uint32_t s_trend_t0 = 0;
     static uint16_t s_trend_mv0 = 0;
     static bool s_trend_charging = false;
@@ -211,16 +217,17 @@ static void bat_update(void) {
         s_trend_mv0 = (uint16_t)s_mv_ema;
     }
 
-    bool charging = (s_mv_ema >= 4150.0f) || s_trend_charging;
+    bool at_plateau = s_full_ever && (s_mv_ema >= (float)s_full_mv - 15.0f);
+    bool charging = (s_mv_ema >= 4150.0f) || s_trend_charging || at_plateau;
     s_state.battery_charging = charging;
 
-    /* ── 自动学习满电电压 ──
-     * 充电器进入恒压阶段后电压会长时间纹丝不动 (这时"趋势在充电"已不成立),
-     * 故判据为: 电压 ≥4.0V 且 30 分钟内波动 ≤3mV。
+    /* ── 自动学习满电电压 (只升不降) ──
+     * 充电器恒压阶段端电压长时间纹丝不动 (这时"趋势在充电"已不成立),
+     * 判据: 电压 ≥4.0V 且 30 分钟内波动 ≤3mV + 最近 1 小时见过上升。
      *
-     * 但"长时间稳定"在放电时同样成立 (轻载下 30 分钟只降不到 1mV), 若不加限制
-     * 会把放电平台误学成"满电", 参考值越学越低、电量虚高。
-     * 因此额外要求: 最近 1 小时内观察到过电压上升 (说明确实在充电)。 */
+     * 只允许向上修正: 微负载/温度/不同充电头会让各次平台有 ±几十 mV 差异,
+     * 往低学会让参考越学越低 → 之后电量整体虚高 (实测曾 4095 → 4011)。
+     * 首次学习 (NVS 里没有) 不受"只升"限制。 */
     bool rose_recently = (s_last_rise_s != 0) && ((now_s - s_last_rise_s) <= 3600);
     if (s_full_auto && s_mv_ema >= 4000.0f && rose_recently) {
         if (s_plateau_mv == 0 || abs((int)s_mv_ema - (int)s_plateau_mv) > 3) {
@@ -229,8 +236,10 @@ static void bat_update(void) {
         } else {
             s_plateau_ms += 30000;                   /* 采样间隔 30s */
             if (s_plateau_ms >= BAT_FULL_STABLE_MS &&
-                s_plateau_mv >= BAT_FULL_DEFAULT - 400 && s_plateau_mv < BAT_FULL_DEFAULT) {
+                s_plateau_mv >= BAT_FULL_DEFAULT - 400 && s_plateau_mv < BAT_FULL_DEFAULT &&
+                (s_plateau_mv >= s_full_mv || !s_full_ever)) {
                 s_full_mv = s_plateau_mv;
+                s_full_ever = true;
                 bat_full_save(s_full_mv);
                 ESP_LOGW(TAG, "battery full voltage learned: %u mV → 满电显示 100%%", s_full_mv);
                 s_plateau_ms = 0;
@@ -241,15 +250,48 @@ static void bat_update(void) {
         s_plateau_ms = 0;
     }
 
-    /* 电量: 按实际满电电压重标定后再查 OCV 表 (满电即 100%) */
-    uint32_t scaled = (s_full_mv > 0) ? (uint32_t)(s_mv_ema * BAT_FULL_DEFAULT / s_full_mv)
-                                      : (uint32_t)s_mv_ema;
-    s_state.battery_pct = bat_pct_from_mv(scaled);
+    /* ── SoC 估算: 充电电压补偿 ──
+     * 充电中端电压 = OCV + 电流×内阻, 直接查表会虚高 (CC 段可虚 15~30%)。
+     * 距恒压平台越远充电电流越大, 补偿越多 (最多 60mV), 平台处衰减到 0。 */
+    float soc_mv = s_mv_ema;
+    if (charging) {
+        float d = (float)s_full_mv - 15.0f - s_mv_ema;    /* 距平台的距离 */
+        if (d > 120.0f)    soc_mv -= 60.0f;
+        else if (d > 0.0f) soc_mv -= d / 2.0f;
+    }
+    uint32_t scaled = (uint32_t)(soc_mv * BAT_FULL_DEFAULT / s_full_mv);
+    uint8_t raw_pct = bat_pct_from_mv(scaled);
 
-    ESP_LOGI(TAG, "BAT pin=%" PRIu32 "mV pack=%.0fmV pct=%u%% full=%umV%s%s",
-             pin_mv, s_mv_ema, s_state.battery_pct, s_full_mv,
+    /* ── 显示百分比: 限速 + 100% 锁存 ──
+     * EMA 在曲线拐点附近抖动会让 % 上蹿下跳; 限速: 放电每 30s 最多 -1%
+     * (电压弛豫允许 +1%), 充电最多 +2%。到恒压平台直接显示 100%;
+     * 拔电后 100% 保持 20 分钟 (或电压跌破 full-60mV), 消除"拔掉 USB
+     * 立刻掉到 9x%"的观感问题。 */
+    static uint8_t  s_pct_disp = 0;
+    static bool     s_pct_init = false;
+    static uint32_t s_latch100_until = 0;
+
+    if (charging && at_plateau) {
+        s_pct_disp = 100;
+        s_latch100_until = now_s + 20 * 60;
+    } else if (now_s < s_latch100_until && s_mv_ema >= (float)s_full_mv - 60.0f) {
+        s_pct_disp = 100;                            /* 拔电后的保持窗口 */
+    } else if (!s_pct_init) {
+        s_pct_disp = raw_pct;
+        s_pct_init = true;
+    } else {
+        int delta = (int)raw_pct - (int)s_pct_disp;
+        int cap = charging ? 2 : 1;
+        if (delta > cap)  delta = cap;
+        if (delta < -1)   delta = -1;
+        s_pct_disp = (uint8_t)((int)s_pct_disp + delta);
+    }
+    s_state.battery_pct = s_pct_disp;
+
+    ESP_LOGI(TAG, "BAT pin=%" PRIu32 "mV pack=%.0fmV pct=%u%%(raw %u) full=%umV%s%s",
+             pin_mv, s_mv_ema, s_state.battery_pct, raw_pct, s_full_mv,
              s_full_auto ? "(auto)" : "(manual)",
-             s_state.battery_charging ? " charging" : "");
+             charging ? " charging" : "");
 }
 
 /* 读板载 SHTC3 室内温湿度 (传感器不在位时 shtc3_read 立即返回 false) */
