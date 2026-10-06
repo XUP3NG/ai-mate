@@ -14,6 +14,9 @@ extern "C" {
 /* 初始化 SNTP (Asia/Shanghai), 非阻塞 */
 void net_query_init_time(void);
 
+/* HTTP 对时兜底: 从响应头 Date 解析 UTC 写入系统时钟 (防 UDP/123 被封的网络) */
+bool net_time_http_sync(void);
+
 /* 立即执行一轮查询 (阻塞数秒), 更新 state 中的 glm/dsk/hist */
 void net_query_poll(app_state_t *state, const app_config_t *cfg);
 

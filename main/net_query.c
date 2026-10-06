@@ -26,9 +26,62 @@ void net_query_init_time(void) {
     tzset();
     esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
     esp_sntp_setservername(0, "ntp.aliyun.com");
-    esp_sntp_setservername(1, "pool.ntp.org");
+    esp_sntp_setservername(1, "ntp1.aliyun.com");
+    esp_sntp_setservername(2, "cn.ntp.org.cn");
     esp_sntp_set_time_sync_notification_cb(sntp_cb);
     esp_sntp_init();
+}
+
+/* ── HTTP 对时兜底 ──
+ * 部分网络 (路由器防火墙/公司网) 封 UDP 123, SNTP 永远同步不了。
+ * 这里发一个轻量 HTTP 请求, 从响应头 `Date: Sat, 27 Sep 2026 04:23:45 GMT`
+ * 解析出 UTC 时间写进系统时钟 —— 和 SNTP 殊途同归。 */
+static int32_t day_no(int32_t key);   /* 定义在下方 (Hinnant 算法) */
+
+bool net_time_http_sync(void) {
+    static const char *URLS[] = {
+        "http://connect.rom.miui.com/generate_204",   /* 204, 无 body, 快 */
+        "http://ip-api.com/json/",                     /* 本项目已在用的接口 */
+        "http://www.baidu.com",                        /* 302 也有 Date 头 */
+    };
+
+    for (int i = 0; i < 3; i++) {
+        esp_http_client_config_t cfg = { .url = URLS[i], .timeout_ms = 5000 };
+        esp_http_client_handle_t cl = esp_http_client_init(&cfg);
+        if (!cl) continue;
+        esp_err_t err = esp_http_client_open(cl, 0);
+        if (err == ESP_OK) {
+            esp_http_client_fetch_headers(cl);
+            char *date = NULL;
+            if (esp_http_client_get_header(cl, "Date", &date) == ESP_OK && date) {
+                /* Www, DD Mon YYYY HH:MM:SS GMT */
+                int day, year, hh, mm, ss, mon = 0;
+                char ms[4] = { 0 };
+                static const char *MON[] = { "Jan","Feb","Mar","Apr","May","Jun",
+                                             "Jul","Aug","Sep","Oct","Nov","Dec" };
+                if (sscanf(date, "%*s %d %3s %d %d:%d:%d",
+                           &day, ms, &year, &hh, &mm, &ss) == 6) {
+                    for (mon = 11; mon >= 0; mon--)
+                        if (strncmp(ms, MON[mon], 3) == 0) break;
+                    if (mon >= 0) {
+                        int64_t epoch = (int64_t)day_no(year * 10000 + (mon + 1) * 100 + day)
+                                        * 86400 + hh * 3600 + mm * 60 + ss;
+                        struct timeval tv = { .tv_sec = (time_t)epoch, .tv_usec = 0 };
+                        settimeofday(&tv, NULL);
+                        ESP_LOGW(TAG, "time synced via HTTP Date (%s): %lld",
+                                 URLS[i], (long long)epoch);
+                        esp_http_client_close(cl);
+                        esp_http_client_cleanup(cl);
+                        return true;
+                    }
+                }
+            }
+        }
+        esp_http_client_close(cl);
+        esp_http_client_cleanup(cl);
+    }
+    ESP_LOGW(TAG, "http time sync failed (all endpoints)");
+    return false;
 }
 
 bool net_query_wifi_ok(void) { return wifi_is_connected(); }

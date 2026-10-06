@@ -294,14 +294,18 @@ static void net_task(void *arg) {
         /* AI 每日像素画: 一天一次, 自己内部判断 (时间未同步/今天已生成都会直接返回) */
         art_poll(&s_state);
 
-        /* 时间未同步 (SNTP 未完成): 再等最多 10s 并补查一次, 保证消费历史有日期 */
+        /* 时间未同步 (SNTP 未完成): 再等最多 10s; 仍不行则用 HTTP 响应头对时
+         * (有的网络封 UDP/123, SNTP 永远同步不了), 成功后补查一轮保证消费历史有日期 */
         if (!s_state.time_valid) {
             for (int i = 0; i < 20 && !s_state.time_valid; i++) {
                 vTaskDelay(pdMS_TO_TICKS(500));
                 s_state.time_valid = (time(NULL) > 1700000000);
             }
+            if (!s_state.time_valid && net_query_wifi_ok() && net_time_http_sync()) {
+                s_state.time_valid = (time(NULL) > 1700000000);
+            }
             if (s_state.time_valid) {
-                ESP_LOGI(TAG, "sntp synced late, re-poll");
+                ESP_LOGI(TAG, "time synced late, re-poll");
                 net_query_poll(&s_state, &s_cfg);
             }
         }
