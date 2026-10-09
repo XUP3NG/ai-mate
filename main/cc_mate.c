@@ -148,7 +148,7 @@ static uint8_t bat_pct_from_mv(uint32_t pack_mv) {
 #define BAT_EMPTY_NVS_KEY  "bempty_learned"
 #define BAT_EMPTY_DEFAULT  3300
 #define BAT_EMPTY_ZONE_MV  3450      /* 低于此值才算"临终区" */
-#define BAT_EMPTY_MIN_MV   3100      /* 采纳下限 (数据异常保护) */
+#define BAT_EMPTY_MIN_MV   3200      /* 采纳下限: 设备 ~3.0V 就欠压复位, 更低必是毛刺 */
 
 static uint16_t s_full_mv = BAT_FULL_DEFAULT;
 static bool     s_full_auto = true;
@@ -210,6 +210,19 @@ static void bat_empty_save(uint16_t mv) {
     nvs_close(h);
 }
 
+/* ── 电压历史 (环形缓冲): 10 分钟一点 × 24h ──
+ * 记录在 RAM, 每小时整体落盘 NVS ai_hist/bhist (290B, 掉电安全)。 */
+#define BATH_N       144               /* 24h × 10min */
+#define BATH_INT_S   600
+#define BATH_NVS_KEY "bhist"
+static uint16_t s_bath[BATH_N];        /* 0 = 无数据 */
+static uint16_t s_bath_idx = 0;
+static uint32_t s_bath_next_s = 0;
+static uint32_t s_bath_count = 0;
+
+static void bat_hist_save(void);
+static void bat_hist_load(void);
+
 /* 读一次电池: 更新 s_state 的电压与电量 (分压比可配, 默认 3.00) */
 static void bat_update(void) {
     uint32_t pin_mv = bat_read_pin_mv();
@@ -220,6 +233,13 @@ static void bat_update(void) {
 
     /* 电压做 EMA 平滑 (负载/温度抖动), 电量由平滑后电压查表得出 */
     static float s_mv_ema = -1.0f;
+    if (s_mv_ema > 0 && pack_mv + 200 < s_mv_ema) {
+        /* 毛刺守卫: 18650 电池座弹簧片搬动时可能瞬断, ADC 会读到 ~1000mV 的
+         * 极低值; 真实放电在 30s 采样间隔内不可能掉 200mV → 直接丢弃本采样。
+         * (曾把空电锚点污染成 3117mV —— 物理上不可能, 设备 3.0V 就复位了) */
+        ESP_LOGW(TAG, "BAT 毛刺 %lumV (EMA %.0f), 丢弃", pack_mv, s_mv_ema);
+        return;
+    }
     if (s_mv_ema < 0) s_mv_ema = (float)pack_mv;
     else s_mv_ema = s_mv_ema * 0.7f + (float)pack_mv * 0.3f;
 
@@ -294,17 +314,23 @@ static void bat_update(void) {
     }
 
     /* ── 空电锚点记录: 临终区 (<3450mV) 持续刷新最低值 ──
-     * NVS 按 ≥25mV 台阶写 (临终一段最多几次, 不伤 flash);
-     * NVS 掉电安全: 写一半断电的条目会被校验丢弃。 */
-    static uint16_t s_empty_min = 0;                  /* 本会话最低 EMA */
+     * 双重防线: ① 必须连续 10 次采样 (5 分钟) 都在临终区 —— 搬动导致的
+     * 接触毛刺只会持续一两分钟; ② 低于 3200mV 不采纳 (设备 3.0V 就复位)。
+     * NVS 按 ≥25mV 台阶写, 写一半断电的条目会被 NVS 校验丢弃。 */
+    static uint16_t s_empty_min = 0;                  /* 本会话临终区最低 EMA */
+    static uint8_t  s_empty_streak = 0;               /* 连续处于临终区的采样数 */
     if (s_mv_ema < BAT_EMPTY_ZONE_MV && s_mv_ema >= BAT_EMPTY_MIN_MV) {
         if (!s_empty_min || s_mv_ema < s_empty_min) s_empty_min = (uint16_t)s_mv_ema;
-        if (!s_empty_ever || s_empty_min < s_empty_mv - 25) {
+        if (++s_empty_streak >= 10 &&
+            (!s_empty_ever || s_empty_min < s_empty_mv - 25)) {
             s_empty_mv = s_empty_min;
             s_empty_ever = true;
             bat_empty_save(s_empty_mv);
             ESP_LOGW(TAG, "battery empty anchor learned: %u mV → 该电压=0%%", s_empty_mv);
         }
+    } else {
+        s_empty_streak = 0;
+        s_empty_min = 0;
     }
 
     /* ── SoC 查表: 两端锚点仿射重标定 ──
@@ -342,17 +368,76 @@ static void bat_update(void) {
         s_pct_init = true;
     } else {
         int delta = (int)raw_pct - (int)s_pct_disp;
-        int cap = charging ? 2 : 1;
-        if (delta > cap)  delta = cap;
-        if (delta < -1)   delta = -1;
-        s_pct_disp = (uint8_t)((int)s_pct_disp + delta);
+        if (delta < -15 || delta > 15) {
+            s_pct_disp = raw_pct;         /* 大偏差直接贴合: 是修正(锚点更新/状态切换), 不是抖动 */
+        } else {
+            int cap = charging ? 2 : 1;
+            if (delta > cap)  delta = cap;
+            if (delta < -1)   delta = -1;
+            s_pct_disp = (uint8_t)((int)s_pct_disp + delta);
+        }
     }
     s_state.battery_pct = s_pct_disp;
+
+    /* ── 电压历史: 10 分钟一点, 24h 环形缓冲 ── (供配网页 /bat 画曲线复盘) */
+    if (now_s >= s_bath_next_s) {
+        s_bath[s_bath_idx] = (uint16_t)s_mv_ema;
+        s_bath_idx = (s_bath_idx + 1) % BATH_N;
+        s_bath_next_s = now_s + BATH_INT_S;
+        ESP_LOGI(TAG, "BATHIST[%u] = %umV (n=%u)", (s_bath_idx + BATH_N - 1) % BATH_N,
+                 (unsigned)s_mv_ema, (unsigned)++s_bath_count);
+        if (s_bath_count % 6 == 0) bat_hist_save();   /* 每小时落盘一次 */
+    }
 
     ESP_LOGI(TAG, "BAT pin=%" PRIu32 "mV pack=%.0fmV pct=%u%%(raw %u) full=%umV empty=%umV%s%s",
              pin_mv, s_mv_ema, s_state.battery_pct, raw_pct, s_full_mv, s_empty_mv,
              s_full_auto ? "(auto)" : "(manual)",
              charging ? " charging" : "");
+}
+
+/* ── 电压历史的存取 ── */
+
+static void bat_hist_load(void) {
+    nvs_handle_t h;
+    size_t sz = 2 + BATH_N * 2;
+    uint8_t buf[2 + BATH_N * 2];
+    if (nvs_open("ai_hist", NVS_READONLY, &h) != ESP_OK) return;
+    bool ok = (nvs_get_blob(h, BATH_NVS_KEY, buf, &sz) == ESP_OK) && (sz == 2 + BATH_N * 2);
+    nvs_close(h);
+    if (!ok) return;
+    s_bath_idx = buf[0] | (buf[1] << 8);
+    if (s_bath_idx >= BATH_N) s_bath_idx = 0;
+    for (int i = 0; i < BATH_N; i++)
+        s_bath[i] = buf[2 + i * 2] | (buf[2 + i * 2 + 1] << 8);
+}
+
+static void bat_hist_save(void) {
+    uint8_t buf[2 + BATH_N * 2];
+    buf[0] = s_bath_idx & 0xFF;
+    buf[1] = s_bath_idx >> 8;
+    for (int i = 0; i < BATH_N; i++) {
+        buf[2 + i * 2] = s_bath[i] & 0xFF;
+        buf[2 + i * 2 + 1] = s_bath[i] >> 8;
+    }
+    nvs_handle_t h;
+    if (nvs_open("ai_hist", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_blob(h, BATH_NVS_KEY, buf, sizeof(buf));
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+/* 给配网页取曲线: 返回环形缓冲起点下标(最老点)与缓冲 */
+void bat_hist_snapshot(uint16_t *start_out, const uint16_t **buf_out, int *n_out) {
+    if (start_out) *start_out = s_bath_idx;   /* idx 处是最老的有效点 */
+    if (buf_out) *buf_out = s_bath;
+    if (n_out) *n_out = BATH_N;
+}
+
+void bat_refs_get(uint16_t *full_mv, uint16_t *empty_mv, bool *auto_full, bool *charging) {
+    if (full_mv) *full_mv = s_full_mv;
+    if (empty_mv) *empty_mv = s_empty_ever ? s_empty_mv : 0;
+    if (auto_full) *auto_full = s_full_auto;
+    if (charging) *charging = s_state.battery_charging;
 }
 
 /* 读板载 SHTC3 室内温湿度 (传感器不在位时 shtc3_read 立即返回 false) */
@@ -529,6 +614,7 @@ void app_main(void)
     s_state.net = NET_CONNECTING;
     net_query_init_time();
     bat_full_load(&s_cfg);           /* 满电电压参考: 配置值或上次学到的 */
+    bat_hist_load();                 /* 电压历史环形缓冲 (上次记录的曲线) */
     net_hist_sync(&s_state);         /* 先把 NVS 历史读出来, 柱状图开机即有数据 */
     art_init(&s_state);              /* 上次的图 (有就先显示) */
     wifi_mgr_connect_best(&s_cfg);   /* 扫描并连接信号最好的已保存网络 */

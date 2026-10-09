@@ -167,6 +167,13 @@ typedef struct {
     uint8_t  indoor_rh;          /* 室内湿度 % */
 } app_state_t;
 
+/* ── 电池电压历史 (cc_mate.c, 配网页 /bat 画曲线用) ── */
+/* 取环形缓冲: start=最老有效点下标, buf[BATH_N], 从 start 起顺时针是新到旧 →
+ * 显示顺序为 buf[start..N-1] + buf[0..start-1] (最老在前), 值 0 = 无数据 */
+void bat_hist_snapshot(uint16_t *start_out, const uint16_t **buf_out, int *n_out);
+/* 当前算法锚点/状态 (0=未学到) */
+void bat_refs_get(uint16_t *full_mv, uint16_t *empty_mv, bool *auto_full, bool *charging);
+
 #ifdef __cplusplus
 }
 #endif

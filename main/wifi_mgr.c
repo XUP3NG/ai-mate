@@ -424,6 +424,7 @@ static void build_portal_html(void) {
         "找 quota/limit 请求头 bigmodel-organization / bigmodel-project</small></p>"
         "<p><small>电量不准时: 串口日志会打印 BAT pin=xxxmV; 用万用表量电池实际电压, "
         "分压比 = 实际电压 / pin 电压 (如量到 3.90V, pin 读数 1.30V → 填 300)</small></p>"
+        "<p><a href='/bat'>查看电池电压曲线 (24h)</a></p>"
         "</form></body></html>", s_cfg.poll_min, s_cfg.bat_div_x100 ? s_cfg.bat_div_x100 : 300,
         s_cfg.bat_full_mv);
     ESP_LOGI(TAG, "portal html: %u/%u bytes", (unsigned)strlen(s_portal_html),
@@ -451,6 +452,65 @@ static esp_err_t portal_root(httpd_req_t *req) {
     build_portal_html();
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, s_portal_html, HTTPD_RESP_USE_STRLEN);
+}
+
+/* ── /bat: 电池电压记录曲线 (24h, 10min 一点) ──
+ * SVG 折线, 网格 3600/3800/4000/4200mV; 另附原始数据与算法锚点。 */
+static esp_err_t portal_bat(httpd_req_t *req) {
+    static char page[4096];
+    uint16_t start = 0;
+    const uint16_t *buf = NULL;
+    int n = 0;
+    bat_hist_snapshot(&start, &buf, &n);
+    uint16_t full_mv = 0, empty_mv = 0;
+    bool auto_full = false, charging = false;
+    bat_refs_get(&full_mv, &empty_mv, &auto_full, &charging);
+
+    /* y 映射: 3400..4200mV → 130..10 */
+    #define BATY(v) (10 + (int)(4200 - (v)) * 120 / 800)
+
+    int p = snprintf(page, sizeof(page),
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>电池曲线</title></head>"
+        "<body style='font-family:sans-serif;margin:12px'>"
+        "<h3>电池电压 (24h, 10min/点)</h3>"
+        "<svg viewBox='0 0 400 150' style='width:100%%;max-width:520px;background:#fff'>"
+        "<line x1='8' y1='%d' x2='392' y2='%d' stroke='#ccc'/>"      /* 4200 */
+        "<line x1='8' y1='%d' x2='392' y2='%d' stroke='#ccc'/>"      /* 4000 */
+        "<line x1='8' y1='%d' x2='392' y2='%d' stroke='#ccc'/>"      /* 3800 */
+        "<line x1='8' y1='%d' x2='392' y2='%d' stroke='#ccc'/>"      /* 3600 */
+        "<text x='10' y='18' font-size='8' fill='#888'>4200</text>"
+        "<text x='10' y='%d' font-size='8' fill='#888'>4000</text>"
+        "<text x='10' y='%d' font-size='8' fill='#888'>3800</text>"
+        "<text x='10' y='%d' font-size='8' fill='#888'>3600</text>"
+        "<polyline fill='none' stroke='#000' stroke-width='1.2' points='",
+        BATY(4200), BATY(4200), BATY(4000), BATY(4000),
+        BATY(3800), BATY(3800), BATY(3600), BATY(3600),
+        BATY(4000) + 10, BATY(3800) + 10, BATY(3600) + 10);
+
+    /* 折线: 从最老点(start)绕一圈, 有效点(>0)画点, 断档(=0)断线 */
+    int plotted = 0;
+    for (int k = 0; k < n && p < (int)sizeof(page) - 40; k++) {
+        uint16_t v = buf[(start + k) % n];
+        if (v == 0) continue;
+        int x = 8 + k * 384 / (n - 1);
+        int y = BATY(v);
+        if (y < 8) y = 8;
+        if (y > 142) y = 142;
+        p += snprintf(page + p, sizeof(page) - p, "%s%d,%d", plotted ? " " : "", x, y);
+        plotted++;
+    }
+    p += snprintf(page + p, sizeof(page) - p, "'/></svg>");
+    p += snprintf(page + p, sizeof(page) - p,
+        "<p>有效点 %d / %d · 满电锚点 %umV(%s) · 空电锚点 %s · %s</p>"
+        "<p><a href='/'>返回配置页</a></p></body></html>",
+        plotted, n, full_mv, auto_full ? "自动学习" : "手动",
+        empty_mv ? "已学习" : "未学习(3300 默认)",
+        charging ? "充电中" : "放电/待机");
+
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    return httpd_resp_send(req, page, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t portal_save(httpd_req_t *req) {
@@ -607,8 +667,10 @@ void wifi_mgr_start_portal(app_config_t *cfg) {
         if (httpd_start(&s_server, &hc) == ESP_OK) {
             httpd_uri_t root = { .uri = "/", .method = HTTP_GET, .handler = portal_root };
             httpd_uri_t save = { .uri = "/save", .method = HTTP_POST, .handler = portal_save };
+            httpd_uri_t bat  = { .uri = "/bat",  .method = HTTP_GET, .handler = portal_bat };
             httpd_register_uri_handler(s_server, &root);
             httpd_register_uri_handler(s_server, &save);
+            httpd_register_uri_handler(s_server, &bat);
         }
     }
 
